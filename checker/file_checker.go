@@ -154,7 +154,8 @@ func TraverseDirectory(path string, fileTypeFlag FileTypeFlag, sheetName string,
 	}
 
 	if config.CheckContent == "校验" {
-		count = 0
+		// 当需要校验内容时，count应该表示需要校验的文件数
+		count = len(filenames)
 	}
 
 	return filenames, count, nil

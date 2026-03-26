@@ -8,9 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +37,7 @@ type CheckTask struct {
 	Filename    string             // 文件名
 	PathName    string             // 路径名称
 	SheetConfig parser.SheetConfig // 检查规则配置
+	IsSpecial   bool               // 是否为特殊路径
 }
 
 // CheckResult 定义检查结果结构体
@@ -58,9 +57,7 @@ type XDRChecker struct {
 	NoSubPath  bool
 	ResultFile *os.File
 	mu         sync.Mutex
-	WorkerNum  int                    // 协程数，默认4
-	fileMutex  sync.Mutex             // 文件写入互斥锁
-	fileLocks  map[string]*sync.Mutex // 每个结果文件的互斥锁
+	WorkerNum  int // 协程数，默认4
 }
 
 func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int) *XDRChecker {
@@ -140,12 +137,15 @@ func (x *XDRChecker) StartCheck() error {
 			continue
 		}
 
+		// 特殊路径也创建任务，在worker中统一处理
+		isSpecial := x.isSpecialPath(pathName)
 		// 为每个文件创建检查任务
 		for _, filename := range filenames {
 			allTasks = append(allTasks, CheckTask{
 				Filename:    filename,
 				PathName:    pathName,
 				SheetConfig: sheetConfig,
+				IsSpecial:   isSpecial,
 			})
 		}
 		totalFiles += count
@@ -292,6 +292,30 @@ func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<-
 	defer wg.Done()
 
 	for task := range taskChan {
+		// 特殊路径处理
+		if task.IsSpecial {
+			x.writeResult(fmt.Sprintf("[Worker %d] 特殊路径%s: 执行特殊处理", id, task.PathName))
+
+			// 执行特殊路径处理
+			// 注意：特殊路径处理需要正确的路径，这里使用PathName作为路径标识
+			if err := x.handleSpecialPath(task.PathName, task.PathName, []string{task.Filename}); err != nil {
+				x.writeResult(fmt.Sprintf("[Worker %d] 特殊路径%s处理失败: %v", id, task.PathName, err))
+			}
+
+			// 特殊路径不进行文件检查，直接返回成功结果
+			result := CheckResult{
+				Task:      task,
+				Errors:    []ValidationError{},
+				LineCount: 0,
+				Duration:  0,
+				Success:   true,
+				ErrorMsg:  fmt.Sprintf("特殊路径%s处理完成", task.PathName),
+			}
+			resultChan <- result
+			continue
+		}
+
+		// 普通文件处理
 		// 处理单个文件检查
 		errors, lineCount, duration := x.checkSingleFileContent(task.Filename, task.SheetConfig)
 
@@ -472,143 +496,6 @@ func (x *XDRChecker) printStatisticsReport(stats map[string]struct {
 	x.writeResult("================")
 }
 
-// getFileLock 获取或创建指定文件的互斥锁
-func (x *XDRChecker) getFileLock(filename string) *sync.Mutex {
-	x.fileMutex.Lock()
-	defer x.fileMutex.Unlock()
-
-	// 初始化fileLocks map
-	if x.fileLocks == nil {
-		x.fileLocks = make(map[string]*sync.Mutex)
-	}
-
-	// 如果文件锁不存在，创建一个新的
-	if lock, exists := x.fileLocks[filename]; exists {
-		return lock
-	}
-
-	// 创建新的文件锁
-	lock := &sync.Mutex{}
-	x.fileLocks[filename] = lock
-	return lock
-}
-
-func (x *XDRChecker) checkXDRPath(pathName, path string, sheetConfigs []parser.SheetConfig, timeParam string) error {
-	// 查找对应的sheet配置
-	var sheetConfig parser.SheetConfig
-	found := false
-
-	for _, sc := range sheetConfigs {
-		// 精确匹配sheet名称
-		if sc.SheetName == pathName {
-			sheetConfig = sc
-			found = true
-			break
-		}
-	}
-
-	// 如果精确匹配失败，尝试多种模糊匹配策略
-	if !found {
-		for _, sc := range sheetConfigs {
-			// 策略1：去除所有空格后比较
-			trimmedSheetName := strings.ReplaceAll(strings.TrimSpace(sc.SheetName), " ", "")
-			trimmedPathName := strings.ReplaceAll(strings.TrimSpace(pathName), " ", "")
-
-			if trimmedSheetName == trimmedPathName {
-				sheetConfig = sc
-				found = true
-				break
-			}
-
-			// 策略2：标准化格式（处理+号周围的空格）
-			normalizedSheetName := normalizeSheetName(sc.SheetName)
-			normalizedPathName := normalizeSheetName(pathName)
-
-			if normalizedSheetName == normalizedPathName {
-				sheetConfig = sc
-				found = true
-				break
-			}
-
-			// 策略3：包含关系匹配（如果路径名是工作表名的子串）
-			if strings.Contains(sc.SheetName, pathName) || strings.Contains(pathName, sc.SheetName) {
-				sheetConfig = sc
-				found = true
-				break
-			}
-		}
-	}
-
-	if !found {
-		return nil // 静默跳过，不输出警告
-	}
-
-	// 构建文件类型配置
-	fileTypeFlag := make(checker.FileTypeFlag)
-
-	// 查找对应路径的文件校验配置
-	var fileValidationConfig parser.FileValidationConfig
-	foundFileConfig := false
-
-	for _, sc := range sheetConfigs {
-		if sc.SheetName == pathName && sc.FileValidation.FileHeader != "" {
-			fileValidationConfig = sc.FileValidation
-			foundFileConfig = true
-			break
-		}
-	}
-
-	// 使用文件校验配置或默认配置
-	config := checker.FileTypeConfig{
-		Headers:      []string{pathName},
-		Suffix:       ".txt", // 默认后缀
-		SizeLimit:    "不校验",
-		CheckContent: "校验",
-	}
-
-	if foundFileConfig {
-		// 使用Excel模板中的配置
-		config.Headers = []string{fileValidationConfig.FileHeader}
-		config.Suffix = fileValidationConfig.FileSuffix
-		config.SizeLimit = fileValidationConfig.FileSize
-		config.CheckContent = fileValidationConfig.CheckContent
-	}
-
-	fileTypeFlag[pathName] = config
-
-	// 构建检查路径：path/年月日/success/
-	checkPath := path
-	if timeParam != "" {
-		checkPath = filepath.Join(path, timeParam, "success")
-	}
-
-	// 遍历目录并检查文件
-	filenames, count, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
-	if err != nil {
-		// 目录遍历错误，记录日志但继续处理其他路径
-		x.writeResult(fmt.Sprintf("检查路径%s时发生错误: %v", pathName, err))
-		return nil
-	}
-
-	x.writeResult(fmt.Sprintf("检查路径%s: 找到%d个文件，检查%d个文件", pathName, count, len(filenames)))
-
-	// 特殊路径处理
-	if x.isSpecialPath(pathName) {
-		return x.handleSpecialPath(pathName, path, filenames)
-	}
-
-	// 检查文件内容并生成结果文件
-	errors, totalLines, totalDuration := x.checkFileContent(filenames, sheetConfig, pathName)
-
-	// 显示路径检查统计信息
-	x.writeResult(fmt.Sprintf("路径%s: 检查%d个文件, 总行数%d, 总耗时%s", pathName, len(filenames), totalLines, totalDuration))
-
-	// 生成校验结果摘要
-	x.generateResultSummary(pathName, path, len(filenames), errors)
-
-	return nil
-}
-
 // 标准化工作表名称（处理+号周围的空格等格式差异）
 func normalizeSheetName(name string) string {
 	// 去除首尾空格
@@ -623,80 +510,6 @@ func normalizeSheetName(name string) string {
 	name = strings.ReplaceAll(name, " ", "")
 
 	return name
-}
-
-func (x *XDRChecker) checkFileContent(filenames []string, sheetConfig parser.SheetConfig, pathName string) ([]string, int, time.Duration) {
-	var errors []string
-	var totalLines int
-	var totalDuration time.Duration
-
-	// 创建结果目录
-	resultDir := x.createResultDirectory()
-
-	// 创建结果文件
-	resultFile := filepath.Join(resultDir, pathName+".txt")
-	file, err := os.Create(resultFile)
-	if err != nil {
-		errors = append(errors, fmt.Sprintf("无法创建结果文件: %v", err))
-		return errors, 0, 0
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-
-	// 检查每个文件
-	for _, filename := range filenames {
-		fileErrors, lineCount, fileDuration := x.checkSingleFileContent(filename, sheetConfig)
-
-		// 显示文件检查统计信息
-		x.writeResult(fmt.Sprintf("文件%s: 检查%d行, 耗时%s", filename, lineCount, fileDuration))
-
-		// 写入结果到文件
-		if len(fileErrors) > 0 {
-			// 直接传递结构体切片到格式化函数
-			x.writeFormattedErrors(writer, filename, fileErrors)
-		}
-
-		// 将结构体错误转换为字符串格式用于返回
-		for _, err := range fileErrors {
-			errors = append(errors, x.formatErrorToString(err))
-		}
-		totalLines += lineCount
-		totalDuration += fileDuration
-	}
-
-	writer.Flush()
-
-	return errors, totalLines, totalDuration
-}
-
-// 按文件和行号分组错误信息
-func (x *XDRChecker) groupErrorsByFileAndLine(errors []string, filename string) map[int][]string {
-	groups := make(map[int][]string)
-
-	for _, errMsg := range errors {
-		// 解析错误信息，提取行号和字段信息
-		lineNum := x.extractLineNumber(errMsg)
-		if lineNum > 0 {
-			groups[lineNum] = append(groups[lineNum], errMsg)
-		}
-	}
-
-	return groups
-}
-
-// 从错误信息中提取行号
-func (x *XDRChecker) extractLineNumber(errMsg string) int {
-	// 查找"第X行"的模式
-	re := regexp.MustCompile(`第(\d+)行`)
-	matches := re.FindStringSubmatch(errMsg)
-	if len(matches) > 1 {
-		lineNum, err := strconv.Atoi(matches[1])
-		if err == nil {
-			return lineNum
-		}
-	}
-	return 0
 }
 
 // 格式化输出错误信息
@@ -776,60 +589,7 @@ func (x *XDRChecker) groupErrorsByFieldStruct(errors []ValidationError) map[stri
 	return fieldErrors
 }
 
-// 按字段分组错误（字符串版本，保持向后兼容）
-func (x *XDRChecker) groupErrorsByField(errors []string) map[string]string {
-	fieldErrors := make(map[string]string)
-
-	for _, errMsg := range errors {
-		// 提取字段名和错误信息
-		fieldName, errorMsg := x.extractFieldAndError(errMsg)
-		if fieldName != "" {
-			if existing, exists := fieldErrors[fieldName]; exists {
-				fieldErrors[fieldName] = existing + "; " + errorMsg
-			} else {
-				fieldErrors[fieldName] = errorMsg
-			}
-		}
-	}
-
-	return fieldErrors
-}
-
-// 将ValidationError转换为字符串格式
-func (x *XDRChecker) formatErrorToString(err ValidationError) string {
-	return fmt.Sprintf("文件%s第%d行第%d字段(%s)校验失败: %s[%s] %s (字段内容: %s) (完整行内容: %s)",
-		err.Filename, err.LineNum, err.FieldIndex, err.FieldName,
-		err.ErrorType, err.RuleOrType, err.Message, err.FieldValue, err.FullLine)
-}
-
-// 提取字段名和错误信息
-func (x *XDRChecker) extractFieldAndError(errMsg string) (string, string) {
-	// 查找字段名和错误信息
-	re := regexp.MustCompile(`字段\((.*?)\)校验失败: (.*?) \(字段内容:.*?\)`)
-	matches := re.FindStringSubmatch(errMsg)
-	if len(matches) > 2 {
-		return matches[1], matches[2]
-	}
-	return "", ""
-}
-
 // 提取原始日志内容
-func (x *XDRChecker) extractOriginalLog(errMsg string) string {
-	// 查找完整行内容
-	re := regexp.MustCompile(`完整行内容: (.*?)\)`)
-	matches := re.FindStringSubmatch(errMsg)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-
-	// 如果找不到完整行内容，回退到查找字段内容
-	re = regexp.MustCompile(`字段内容: (.*?)\)`)
-	matches = re.FindStringSubmatch(errMsg)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
 
 func (x *XDRChecker) isSpecialPath(pathName string) bool {
 	// 检查是否为需要特殊处理的路径
