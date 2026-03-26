@@ -20,6 +20,19 @@ import (
 	"github.com/user/go_xdrCheck/validator"
 )
 
+// ValidationError 定义校验错误结构体
+type ValidationError struct {
+	Filename   string // 文件名
+	LineNum    int    // 行号
+	FieldIndex int    // 字段索引（从1开始）
+	FieldName  string // 字段名称
+	ErrorType  string // 错误类型："type" 或 "rule"
+	RuleOrType string // 规则或类型名称
+	Message    string // 错误消息
+	FieldValue string // 字段内容
+	FullLine   string // 完整行内容
+}
+
 type XDRChecker struct {
 	Config     *config.Config
 	TimeParam  string
@@ -261,12 +274,14 @@ func (x *XDRChecker) checkFileContent(filenames []string, sheetConfig parser.She
 
 		// 写入结果到文件
 		if len(fileErrors) > 0 {
-			// 按文件分组错误信息
-			fileErrorGroups := x.groupErrorsByFileAndLine(fileErrors, filename)
-			x.writeFormattedErrors(writer, filename, fileErrorGroups)
+			// 直接传递结构体切片到格式化函数
+			x.writeFormattedErrors(writer, filename, fileErrors)
 		}
 
-		errors = append(errors, fileErrors...)
+		// 将结构体错误转换为字符串格式用于返回
+		for _, err := range fileErrors {
+			errors = append(errors, x.formatErrorToString(err))
+		}
 		totalLines += lineCount
 		totalDuration += fileDuration
 	}
@@ -306,10 +321,13 @@ func (x *XDRChecker) extractLineNumber(errMsg string) int {
 }
 
 // 格式化输出错误信息
-func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string, errorGroups map[int][]string) {
+func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string, errors []ValidationError) {
 	// 写入文件头
 	writer.WriteString(fmt.Sprintf("错误文件:%s \n", filename))
 	writer.WriteString(" \n")
+
+	// 按行号分组错误
+	errorGroups := x.groupErrorsByLine(errors)
 
 	// 按行号排序
 	var lineNumbers []int
@@ -322,11 +340,14 @@ func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string,
 	for _, lineNum := range lineNumbers {
 		lineErrors := errorGroups[lineNum]
 
-		// 提取该行的原始日志内容
-		originalLog := x.extractOriginalLog(lineErrors[0])
+		// 获取该行的原始日志内容（从第一个错误中获取）
+		var originalLog string
+		if len(lineErrors) > 0 {
+			originalLog = lineErrors[0].FullLine
+		}
 
 		// 按字段分组错误
-		fieldErrors := x.groupErrorsByField(lineErrors)
+		fieldErrors := x.groupErrorsByFieldStruct(lineErrors)
 
 		// 写入字段错误信息
 		for fieldName, fieldError := range fieldErrors {
@@ -344,7 +365,39 @@ func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string,
 	writer.WriteString(" \n")
 }
 
-// 按字段分组错误
+// 按行号分组错误
+func (x *XDRChecker) groupErrorsByLine(errors []ValidationError) map[int][]ValidationError {
+	groups := make(map[int][]ValidationError)
+
+	for _, err := range errors {
+		groups[err.LineNum] = append(groups[err.LineNum], err)
+	}
+
+	return groups
+}
+
+// 按字段分组错误（结构体版本）
+func (x *XDRChecker) groupErrorsByFieldStruct(errors []ValidationError) map[string]string {
+	fieldErrors := make(map[string]string)
+
+	for _, err := range errors {
+		// 构建错误信息
+		errorMsg := fmt.Sprintf("error:<%s>%s", err.FieldValue, err.Message)
+		if err.ErrorType == "type" {
+			errorMsg = fmt.Sprintf("error:<%s>必须是%s格式", err.FieldValue, err.RuleOrType)
+		}
+
+		if existing, exists := fieldErrors[err.FieldName]; exists {
+			fieldErrors[err.FieldName] = existing + "; " + errorMsg
+		} else {
+			fieldErrors[err.FieldName] = errorMsg
+		}
+	}
+
+	return fieldErrors
+}
+
+// 按字段分组错误（字符串版本，保持向后兼容）
 func (x *XDRChecker) groupErrorsByField(errors []string) map[string]string {
 	fieldErrors := make(map[string]string)
 
@@ -363,6 +416,13 @@ func (x *XDRChecker) groupErrorsByField(errors []string) map[string]string {
 	return fieldErrors
 }
 
+// 将ValidationError转换为字符串格式
+func (x *XDRChecker) formatErrorToString(err ValidationError) string {
+	return fmt.Sprintf("文件%s第%d行第%d字段(%s)校验失败: %s[%s] %s (字段内容: %s) (完整行内容: %s)",
+		err.Filename, err.LineNum, err.FieldIndex, err.FieldName,
+		err.ErrorType, err.RuleOrType, err.Message, err.FieldValue, err.FullLine)
+}
+
 // 提取字段名和错误信息
 func (x *XDRChecker) extractFieldAndError(errMsg string) (string, string) {
 	// 查找字段名和错误信息
@@ -376,9 +436,16 @@ func (x *XDRChecker) extractFieldAndError(errMsg string) (string, string) {
 
 // 提取原始日志内容
 func (x *XDRChecker) extractOriginalLog(errMsg string) string {
-	// 查找字段内容
-	re := regexp.MustCompile(`字段内容: (.*?)\)`)
+	// 查找完整行内容
+	re := regexp.MustCompile(`完整行内容: (.*?)\)`)
 	matches := re.FindStringSubmatch(errMsg)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	// 如果找不到完整行内容，回退到查找字段内容
+	re = regexp.MustCompile(`字段内容: (.*?)\)`)
+	matches = re.FindStringSubmatch(errMsg)
 	if len(matches) > 1 {
 		return matches[1]
 	}
@@ -462,8 +529,8 @@ func (x *XDRChecker) generateResultSummary(pathName, path string, fileCount int,
 	}
 }
 
-func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.SheetConfig) ([]string, int, time.Duration) {
-	var errors []string
+func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.SheetConfig) ([]ValidationError, int, time.Duration) {
+	var errors []ValidationError
 	var lineCount int
 
 	// 记录开始时间
@@ -472,7 +539,17 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 	// 根据文件类型选择解析方式
 	file, err := x.openFile(filename)
 	if err != nil {
-		errors = append(errors, fmt.Sprintf("文件%s无法打开: %v", filename, err))
+		errors = append(errors, ValidationError{
+			Filename:   filename,
+			LineNum:    0,
+			FieldIndex: 0,
+			FieldName:  "",
+			ErrorType:  "system",
+			RuleOrType: "file_open",
+			Message:    fmt.Sprintf("文件无法打开: %v", err),
+			FieldValue: "",
+			FullLine:   "",
+		})
 		return errors, 0, time.Since(startTime)
 	}
 	defer file.Close()
@@ -487,7 +564,17 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			break
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("文件%s读取错误: %v", filename, err))
+			errors = append(errors, ValidationError{
+				Filename:   filename,
+				LineNum:    0,
+				FieldIndex: 0,
+				FieldName:  "",
+				ErrorType:  "system",
+				RuleOrType: "file_read",
+				Message:    fmt.Sprintf("文件读取错误: %v", err),
+				FieldValue: "",
+				FullLine:   "",
+			})
 			break
 		}
 
@@ -523,8 +610,17 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			if fieldRule.Type != "" {
 				valid, msg := validator.ValidateType(fieldRule.Type)
 				if !valid {
-					errors = append(errors, fmt.Sprintf("文件%s第%d行第%d字段(%s)校验失败: 类型[%s] %s (字段内容: %s)",
-						filename, lineNum, i+1, fieldRule.FieldName, fieldRule.Type, msg, fieldValue))
+					errors = append(errors, ValidationError{
+						Filename:   filename,
+						LineNum:    lineNum,
+						FieldIndex: i + 1,
+						FieldName:  fieldRule.FieldName,
+						ErrorType:  "type",
+						RuleOrType: fieldRule.Type,
+						Message:    msg,
+						FieldValue: fieldValue,
+						FullLine:   line,
+					})
 				}
 			}
 
@@ -532,8 +628,17 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			for _, rule := range fieldRule.Rules {
 				valid, msg := validator.ValidateRule(rule)
 				if !valid {
-					errors = append(errors, fmt.Sprintf("文件%s第%d行第%d字段(%s)校验失败: 规则[%s] %s (字段内容: %s)",
-						filename, lineNum, i+1, fieldRule.FieldName, rule, msg, fieldValue))
+					errors = append(errors, ValidationError{
+						Filename:   filename,
+						LineNum:    lineNum,
+						FieldIndex: i + 1,
+						FieldName:  fieldRule.FieldName,
+						ErrorType:  "rule",
+						RuleOrType: rule,
+						Message:    msg,
+						FieldValue: fieldValue,
+						FullLine:   line,
+					})
 				}
 			}
 		}
