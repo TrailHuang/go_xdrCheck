@@ -1,6 +1,7 @@
 package core
 
 import (
+	"archive/tar"
 	"bufio"
 	"compress/gzip"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +35,23 @@ type ValidationError struct {
 	FullLine   string // 完整行内容
 }
 
+// CheckTask 定义检查任务结构体
+type CheckTask struct {
+	Filename    string             // 文件名
+	PathName    string             // 路径名称
+	SheetConfig parser.SheetConfig // 检查规则配置
+}
+
+// CheckResult 定义检查结果结构体
+type CheckResult struct {
+	Task      CheckTask         // 原始任务
+	Errors    []ValidationError // 检查错误
+	LineCount int               // 检查行数
+	Duration  time.Duration     // 检查耗时
+	Success   bool              // 是否成功
+	ErrorMsg  string            // 错误消息（如果有）
+}
+
 type XDRChecker struct {
 	Config     *config.Config
 	TimeParam  string
@@ -40,14 +59,23 @@ type XDRChecker struct {
 	NoSubPath  bool
 	ResultFile *os.File
 	mu         sync.Mutex
+	WorkerNum  int                    // 协程数，默认4
+	fileMutex  sync.Mutex             // 文件写入互斥锁
+	fileLocks  map[string]*sync.Mutex // 每个结果文件的互斥锁
 }
 
-func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool) *XDRChecker {
+func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int) *XDRChecker {
+	// 如果workerNum为0或负数，使用默认值4
+	if workerNum <= 0 {
+		workerNum = 4
+	}
+
 	return &XDRChecker{
 		Config:    cfg,
 		TimeParam: timeParam,
 		ScanNum:   scanNum,
 		NoSubPath: noSubPath,
+		WorkerNum: workerNum,
 	}
 }
 
@@ -84,34 +112,387 @@ func (x *XDRChecker) StartCheck() error {
 		return fmt.Errorf("解析模板文件失败: %v", err)
 	}
 
-	// 并发检查所有XDR路径
-	var wg sync.WaitGroup
-	errors := make(chan error, len(x.Config.XDRPaths))
+	// 设置协程数，默认4
+	if x.WorkerNum <= 0 {
+		x.WorkerNum = 4
+	}
+
+	// 第一阶段：扫描所有文件，构建任务列表
+	var allTasks []CheckTask
+	var totalFiles int
 
 	for pathName, pathValue := range x.Config.XDRPaths {
-		wg.Add(1)
-		go func(name, path string) {
-			defer wg.Done()
-			if err := x.checkXDRPath(name, path, sheetConfigs, x.TimeParam); err != nil {
-				errors <- fmt.Errorf("检查路径%s失败: %v", name, err)
+		// 查找对应的sheet配置
+		sheetConfig, found := x.findSheetConfig(sheetConfigs, pathName)
+		if !found {
+			continue // 静默跳过，不输出警告
+		}
+
+		// 构建检查路径
+		checkPath := pathValue
+		if x.TimeParam != "" {
+			checkPath = filepath.Join(pathValue, x.TimeParam, "success")
+		}
+
+		// 扫描该路径下的所有文件
+		filenames, count, err := x.scanFilesForPath(checkPath, pathName, sheetConfig)
+		if err != nil {
+			x.writeResult(fmt.Sprintf("扫描路径%s失败: %v", pathName, err))
+			continue
+		}
+
+		// 为每个文件创建检查任务
+		for _, filename := range filenames {
+			allTasks = append(allTasks, CheckTask{
+				Filename:    filename,
+				PathName:    pathName,
+				SheetConfig: sheetConfig,
+			})
+		}
+		totalFiles += count
+	}
+
+	x.writeResult(fmt.Sprintf("扫描完成，共发现%d个文件，准备使用%d个协程进行处理", totalFiles, x.WorkerNum))
+
+	// 第二阶段：使用协程池处理所有任务
+	return x.processTasksWithWorkerPool(allTasks, x.WorkerNum)
+}
+
+// findSheetConfig 查找对应的sheet配置
+func (x *XDRChecker) findSheetConfig(sheetConfigs []parser.SheetConfig, pathName string) (parser.SheetConfig, bool) {
+	var sheetConfig parser.SheetConfig
+	found := false
+
+	for _, sc := range sheetConfigs {
+		// 精确匹配sheet名称
+		if sc.SheetName == pathName {
+			sheetConfig = sc
+			found = true
+			break
+		}
+	}
+
+	// 如果精确匹配失败，尝试多种模糊匹配策略
+	if !found {
+		for _, sc := range sheetConfigs {
+			// 策略1：去除所有空格后比较
+			trimmedSheetName := strings.ReplaceAll(strings.TrimSpace(sc.SheetName), " ", "")
+			trimmedPathName := strings.ReplaceAll(strings.TrimSpace(pathName), " ", "")
+
+			if trimmedSheetName == trimmedPathName {
+				sheetConfig = sc
+				found = true
+				break
 			}
-		}(pathName, pathValue)
+
+			// 策略2：标准化格式（处理+号周围的空格）
+			normalizedSheetName := normalizeSheetName(sc.SheetName)
+			normalizedPathName := normalizeSheetName(pathName)
+
+			if normalizedSheetName == normalizedPathName {
+				sheetConfig = sc
+				found = true
+				break
+			}
+
+			// 策略3：包含关系匹配（如果路径名是工作表名的子串）
+			if strings.Contains(sc.SheetName, pathName) || strings.Contains(pathName, sc.SheetName) {
+				sheetConfig = sc
+				found = true
+				break
+			}
+		}
 	}
 
+	return sheetConfig, found
+}
+
+// scanFilesForPath 扫描指定路径下的文件
+func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig parser.SheetConfig) ([]string, int, error) {
+	// 构建文件类型配置
+	fileTypeFlag := make(checker.FileTypeFlag)
+
+	// 查找对应路径的文件校验配置
+	var fileValidationConfig parser.FileValidationConfig
+	foundFileConfig := false
+
+	if sheetConfig.FileValidation.FileHeader != "" {
+		fileValidationConfig = sheetConfig.FileValidation
+		foundFileConfig = true
+	}
+
+	// 使用文件校验配置或默认配置
+	config := checker.FileTypeConfig{
+		Headers:      []string{pathName},
+		Suffix:       ".txt", // 默认后缀
+		SizeLimit:    "不校验",
+		CheckContent: "校验",
+	}
+
+	if foundFileConfig {
+		// 使用Excel模板中的配置
+		config.Headers = []string{fileValidationConfig.FileHeader}
+		config.Suffix = fileValidationConfig.FileSuffix
+		config.SizeLimit = fileValidationConfig.FileSize
+		config.CheckContent = fileValidationConfig.CheckContent
+	}
+
+	fileTypeFlag[pathName] = config
+
+	// 遍历目录并获取文件列表
+	filenames, count, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
+	if err != nil {
+		return nil, 0, fmt.Errorf("目录遍历错误: %v", err)
+	}
+
+	return filenames, count, nil
+}
+
+// processTasksWithWorkerPool 使用协程池处理任务，单协程写入文件
+func (x *XDRChecker) processTasksWithWorkerPool(tasks []CheckTask, workerNum int) error {
+	if len(tasks) == 0 {
+		x.writeResult("没有发现需要检查的文件")
+		return nil
+	}
+
+	// 创建任务通道和结果通道
+	taskChan := make(chan CheckTask, len(tasks))
+	resultChan := make(chan CheckResult, len(tasks))
+
+	// 启动worker协程
+	var wg sync.WaitGroup
+	for i := 0; i < workerNum; i++ {
+		wg.Add(1)
+		go x.worker(i, taskChan, resultChan, &wg)
+	}
+	runtime.SetBlockProfileRate(50)
+	runtime.SetMutexProfileFraction(10000)
+	// 启动文件写入协程
+	var fileWg sync.WaitGroup
+	fileWg.Add(1)
+	go x.fileWriter(resultChan, &fileWg)
+
+	// 发送任务到通道
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+
+	// 等待所有worker完成
 	wg.Wait()
-	close(errors)
+	close(resultChan)
 
-	// 收集错误
-	var errorList []string
-	for err := range errors {
-		errorList = append(errorList, err.Error())
-	}
+	// 等待文件写入完成
+	fileWg.Wait()
 
-	if len(errorList) > 0 {
-		return fmt.Errorf(strings.Join(errorList, "; "))
-	}
-
+	x.writeResult("所有文件检查完成")
 	return nil
+}
+
+// worker 协程处理函数
+func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<- CheckResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for task := range taskChan {
+		// 处理单个文件检查
+		errors, lineCount, duration := x.checkSingleFileContent(task.Filename, task.SheetConfig)
+
+		// 显示文件检查统计信息
+		x.writeResult(fmt.Sprintf("[Worker %d] 文件%s: 检查%d行, 耗时%s, 发现%d个错误",
+			id, task.Filename, lineCount, duration, len(errors)))
+
+		// 发送处理结果到文件写入协程
+		result := CheckResult{
+			Task:      task,
+			Errors:    errors,
+			LineCount: lineCount,
+			Duration:  duration,
+			Success:   len(errors) == 0,
+		}
+
+		if len(errors) > 0 {
+			result.ErrorMsg = fmt.Sprintf("文件%s检查发现%d个错误", task.Filename, len(errors))
+		}
+
+		resultChan <- result
+	}
+}
+
+// fileWriter 文件写入协程，单协程负责所有文件写入
+func (x *XDRChecker) fileWriter(resultChan <-chan CheckResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// 创建结果目录
+	resultDir := x.createResultDirectory()
+
+	// 用于跟踪每个路径的结果文件
+	resultFiles := make(map[string]*os.File)
+	writers := make(map[string]*bufio.Writer)
+
+	// 统计信息
+	startTime := time.Now()
+	stats := make(map[string]struct {
+		FileCount   int
+		ErrorCount  int
+		TotalLines  int
+		TotalErrors int
+		ResultFile  string
+	})
+
+	// 处理所有结果
+	for result := range resultChan {
+		pathName := result.Task.PathName
+
+		// 更新统计信息
+		if stat, exists := stats[pathName]; exists {
+			stat.FileCount++
+			stat.TotalLines += result.LineCount
+			stat.TotalErrors += len(result.Errors)
+			if len(result.Errors) > 0 {
+				stat.ErrorCount++
+			}
+			stats[pathName] = stat
+		} else {
+			stats[pathName] = struct {
+				FileCount   int
+				ErrorCount  int
+				TotalLines  int
+				TotalErrors int
+				ResultFile  string
+			}{
+				FileCount:   1,
+				ErrorCount:  ternary(len(result.Errors) > 0, 1, 0),
+				TotalLines:  result.LineCount,
+				TotalErrors: len(result.Errors),
+				ResultFile:  "", // 初始化为空，稍后在有错误时设置
+			}
+		}
+
+		// 如果有错误，写入结果文件
+		if len(result.Errors) > 0 {
+			resultFile := filepath.Join(resultDir, pathName+".txt")
+
+			// 更新统计信息中的结果文件名
+			if stat, exists := stats[pathName]; exists {
+				stat.ResultFile = resultFile
+				stats[pathName] = stat
+			}
+
+			// 如果文件还未打开，则打开文件
+			if _, exists := resultFiles[resultFile]; !exists {
+				file, err := os.OpenFile(resultFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err != nil {
+					x.writeResult(fmt.Sprintf("无法打开结果文件%s: %v", resultFile, err))
+					continue
+				}
+
+				resultFiles[resultFile] = file
+				writers[resultFile] = bufio.NewWriter(file)
+				x.writeResult(fmt.Sprintf("创建结果文件: %s", resultFile))
+			}
+
+			// 写入错误信息
+			writer := writers[resultFile]
+			x.writeFormattedErrors(writer, result.Task.Filename, result.Errors)
+			x.writeResult(fmt.Sprintf("写入错误信息到文件: %s (源文件: %s, 错误数: %d)",
+				resultFile, result.Task.Filename, len(result.Errors)))
+		}
+	}
+
+	// 刷新并关闭所有文件
+	for resultFile, writer := range writers {
+		writer.Flush()
+		if file, exists := resultFiles[resultFile]; exists {
+			file.Close()
+		}
+	}
+
+	// 打印统计报告
+	x.printStatisticsReport(stats, time.Since(startTime))
+}
+
+// ternary 三目运算符函数
+func ternary(condition bool, trueVal, falseVal int) int {
+	if condition {
+		return trueVal
+	}
+	return falseVal
+}
+
+// printStatisticsReport 打印统计报告
+func (x *XDRChecker) printStatisticsReport(stats map[string]struct {
+	FileCount   int
+	ErrorCount  int
+	TotalLines  int
+	TotalErrors int
+	ResultFile  string
+}, duration time.Duration) {
+	x.writeResult("\n=== 文件检查统计报告 ===")
+	x.writeResult(fmt.Sprintf("总处理时间: %s", duration))
+	x.writeResult("-")
+
+	totalFiles := 0
+	totalErrorFiles := 0
+	totalLines := 0
+	totalErrors := 0
+
+	// 按路径名称排序输出
+	var paths []string
+	for path := range stats {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		stat := stats[path]
+		x.writeResult(fmt.Sprintf("路径: %s", path))
+		x.writeResult(fmt.Sprintf("  文件总数: %d", stat.FileCount))
+		x.writeResult(fmt.Sprintf("  错误文件数: %d", stat.ErrorCount))
+		x.writeResult(fmt.Sprintf("  总行数: %d", stat.TotalLines))
+		x.writeResult(fmt.Sprintf("  总错误数: %d", stat.TotalErrors))
+
+		// 如果有错误，显示结果文件名
+		if stat.TotalErrors > 0 && stat.ResultFile != "" {
+			x.writeResult(fmt.Sprintf("  结果文件: %s", stat.ResultFile))
+		}
+
+		x.writeResult("-")
+
+		totalFiles += stat.FileCount
+		totalErrorFiles += stat.ErrorCount
+		totalLines += stat.TotalLines
+		totalErrors += stat.TotalErrors
+	}
+
+	x.writeResult("=== 汇总统计 ===")
+	x.writeResult(fmt.Sprintf("总文件数: %d", totalFiles))
+	x.writeResult(fmt.Sprintf("总错误文件数: %d", totalErrorFiles))
+	x.writeResult(fmt.Sprintf("总检查行数: %d", totalLines))
+	x.writeResult(fmt.Sprintf("总错误数: %d", totalErrors))
+	x.writeResult(fmt.Sprintf("错误率: %.2f%%", float64(totalErrors)/float64(totalLines)*100))
+	x.writeResult(fmt.Sprintf("文件错误率: %.2f%%", float64(totalErrorFiles)/float64(totalFiles)*100))
+	x.writeResult("================")
+}
+
+// getFileLock 获取或创建指定文件的互斥锁
+func (x *XDRChecker) getFileLock(filename string) *sync.Mutex {
+	x.fileMutex.Lock()
+	defer x.fileMutex.Unlock()
+
+	// 初始化fileLocks map
+	if x.fileLocks == nil {
+		x.fileLocks = make(map[string]*sync.Mutex)
+	}
+
+	// 如果文件锁不存在，创建一个新的
+	if lock, exists := x.fileLocks[filename]; exists {
+		return lock
+	}
+
+	// 创建新的文件锁
+	lock := &sync.Mutex{}
+	x.fileLocks[filename] = lock
+	return lock
 }
 
 func (x *XDRChecker) checkXDRPath(pathName, path string, sheetConfigs []parser.SheetConfig, timeParam string) error {
@@ -677,18 +1058,41 @@ func (x *XDRChecker) openCompressedFile(filename string) (io.ReadCloser, error) 
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	if strings.HasSuffix(filename, ".tar.gz") {
-		// 处理.tar.gz文件
+		// 处理.tar.gz文件 - 先解压gzip，再解析tar格式
 		gzReader, err := gzip.NewReader(file)
 		if err != nil {
 			file.Close()
 			return nil, fmt.Errorf("创建gzip读取器失败: %v", err)
 		}
 
-		// 创建组合的读取器，关闭时同时关闭gzip读取器和文件
-		return &combinedReader{
-			Reader:  gzReader,
-			closers: []io.Closer{gzReader, file},
-		}, nil
+		// 解析tar格式，提取第一个文件的内容
+		tarReader := tar.NewReader(gzReader)
+
+		// 读取tar文件头，找到第一个普通文件
+		for {
+			header, err := tarReader.Next()
+			if err == io.EOF {
+				break // tar文件结束
+			}
+			if err != nil {
+				gzReader.Close()
+				file.Close()
+				return nil, fmt.Errorf("读取tar文件头失败: %v", err)
+			}
+
+			// 如果是普通文件，返回其内容
+			if header.Typeflag == tar.TypeReg {
+				// 创建组合的读取器，关闭时同时关闭所有资源
+				return &combinedReader{
+					Reader:  tarReader,
+					closers: []io.Closer{gzReader, file},
+				}, nil
+			}
+		}
+
+		gzReader.Close()
+		file.Close()
+		return nil, fmt.Errorf("tar文件中未找到普通文件")
 	} else if ext == ".gz" {
 		// 处理.gz文件
 		gzReader, err := gzip.NewReader(file)

@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/user/go_xdrCheck/config"
 	"github.com/user/go_xdrCheck/core"
+
+	_ "net/http/pprof"
 
 	"github.com/spf13/pflag"
 )
@@ -20,6 +23,7 @@ var (
 	scanNum   int
 	checkNow  bool
 	noSubPath bool
+	workerNum int
 )
 
 func main() {
@@ -28,6 +32,7 @@ func main() {
 	pflag.IntVarP(&scanNum, "num", "n", 0, "scan num per dir")
 	pflag.BoolVarP(&checkNow, "now", "o", false, "now time")
 	pflag.BoolVarP(&noSubPath, "nosubpath", "p", false, "do not check sub path")
+	pflag.IntVarP(&workerNum, "routines", "r", 4, "number of worker routines (default: 4)")
 	pflag.BoolP("help", "h", false, "help info")
 	pflag.BoolP("version", "v", false, "version info")
 
@@ -68,6 +73,10 @@ func main() {
 	// 清理旧的临时目录
 	core.ClearOldTmpDirs("/tmp/xdr_check", 30)
 
+	go func() {
+		http.ListenAndServe("127.0.0.1:8899", nil)
+	}()
+
 	// 启动主程序
 	if err := startCheck(); err != nil {
 		fmt.Printf("检查失败: %v\n", err)
@@ -83,6 +92,7 @@ func printHelp() {
 	fmt.Println("-o,\t--now\t\t\tnow time")
 	fmt.Println("-n,\t--num\t\t\tscan num per dir")
 	fmt.Println("-p,\t--nosubpath\t\tdo not check sub path")
+	fmt.Println("-r,\t--routines\t\tnumber of worker routines (default: 4)")
 	fmt.Println("========================================================")
 }
 
@@ -101,7 +111,7 @@ func startCheck() error {
 	}
 
 	// 创建检查器
-	checker := core.NewXDRChecker(cfg, timeParam, scanNum, noSubPath)
+	checker := core.NewXDRChecker(cfg, timeParam, scanNum, noSubPath, workerNum)
 
 	// 开始检查
 	return checker.StartCheck()
