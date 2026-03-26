@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -265,8 +264,7 @@ func (x *XDRChecker) processTasksWithWorkerPool(tasks []CheckTask, workerNum int
 		wg.Add(1)
 		go x.worker(i, taskChan, resultChan, &wg)
 	}
-	runtime.SetBlockProfileRate(50)
-	runtime.SetMutexProfileFraction(10000)
+
 	// 启动文件写入协程
 	var fileWg sync.WaitGroup
 	fileWg.Add(1)
