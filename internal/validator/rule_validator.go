@@ -541,7 +541,7 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 	expectedValues := strings.TrimSpace(parts[1])
 
 	// 解析字段引用（如 $13）
-	fieldIndex, err := rv.parseFieldReference(fieldRef)
+	fieldIndex, fieldNumberStr, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
@@ -565,7 +565,7 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 		if actualValue == expected {
 			// 条件满足，当前字段必须有值
 			if rv.FieldValue == "" {
-				return false, fmt.Sprintf("当字段%d等于%s时，此字段不能为空", fieldIndex+1, expected)
+				return false, fmt.Sprintf("当字段%s等于%s时，此字段不能为空", fieldNumberStr, expected)
 			}
 			return true, ""
 		}
@@ -586,7 +586,7 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	expectedValue := strings.TrimSpace(parts[1])
 
 	// 解析字段引用
-	fieldIndex, err := rv.parseFieldReference(fieldRef)
+	fieldIndex, fieldNumberStr, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
@@ -606,7 +606,7 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	if actualValue != expectedValue {
 		// 条件满足，当前字段必须有值
 		if rv.FieldValue == "" {
-			return false, fmt.Sprintf("当字段%d不等于%s时，此字段不能为空", fieldIndex+1, expectedValue)
+			return false, fmt.Sprintf("当字段%s不等于%s时，此字段不能为空", fieldNumberStr, expectedValue)
 		}
 		return true, ""
 	}
@@ -616,9 +616,10 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 }
 
 // parseFieldReference 解析字段引用（如 $13）
-func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, error) {
+// 返回字段索引和原始字段编号
+func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, string, error) {
 	if !strings.HasPrefix(fieldRef, "$") {
-		return 0, fmt.Errorf("字段引用必须以$开头")
+		return 0, "", fmt.Errorf("字段引用必须以$开头")
 	}
 
 	fieldNumberStr := strings.TrimPrefix(fieldRef, "$")
@@ -626,17 +627,17 @@ func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, error) {
 	// 如果有字段编号映射，使用映射关系
 	if rv.FieldNumberMap != nil {
 		if fieldIndex, exists := rv.FieldNumberMap[fieldNumberStr]; exists {
-			return fieldIndex, nil
+			return fieldIndex, fieldNumberStr, nil
 		}
-		return 0, fmt.Errorf("字段编号%s在映射表中不存在", fieldNumberStr)
+		return 0, "", fmt.Errorf("字段编号%s在映射表中不存在", fieldNumberStr)
 	}
 
 	// 如果没有映射表，使用直接数字（向后兼容）
 	// Excel字段编号从1开始，数组索引从0开始，需要减1
 	fieldNumber, err := strconv.Atoi(fieldNumberStr)
 	if err != nil {
-		return 0, fmt.Errorf("字段索引不是有效数字")
+		return 0, "", fmt.Errorf("字段索引不是有效数字")
 	}
 
-	return fieldNumber, nil
+	return fieldNumber - 1, fieldNumberStr, nil
 }
