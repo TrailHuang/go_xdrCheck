@@ -580,7 +580,10 @@ func (x *XDRChecker) groupErrorsByFieldStruct(errors []ValidationError) map[stri
 		}
 
 		if existing, exists := fieldErrors[err.FieldName]; exists {
-			fieldErrors[err.FieldName] = existing + "; " + errorMsg
+			// 检查是否已经存在相同的错误信息，避免重复添加
+			if !strings.Contains(existing, errorMsg) {
+				fieldErrors[err.FieldName] = existing + "; " + errorMsg
+			}
 		} else {
 			fieldErrors[err.FieldName] = errorMsg
 		}
@@ -749,11 +752,19 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			fieldValue := strings.TrimSpace(fields[i])
 
-			// 如果是选填字段且为空，检查是否需要条件验证
-			if fieldRule.Required == "选填" && fieldValue == "" {
-				// 如果有条件规则，需要验证条件
-				if fieldRule.Condition != "" {
-					validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
+			// 如果是空字段，跳过检查
+			if fieldRule.Required == "空" {
+				continue
+			}
+
+			// 校验字段
+			validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
+
+			// 首先校验条件（如果有）
+			if fieldRule.Condition != "" {
+				// 对于选填字段且为空的情况，需要特殊处理
+				if fieldRule.Required == "选填" && fieldValue == "" {
+					// 选填字段为空时，必须验证条件
 					valid, msg := validator.ValidateCondition(fieldRule.Condition)
 					if !valid {
 						errors = append(errors, ValidationError{
@@ -769,34 +780,21 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 						})
 					}
 				} else {
-					// 没有条件规则，直接跳过
-					continue
-				}
-			}
-
-			// 如果是空字段，跳过检查
-			if fieldRule.Required == "空" {
-				continue
-			}
-
-			// 校验字段
-			validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
-
-			// 首先校验条件（如果有）
-			if fieldRule.Condition != "" {
-				valid, msg := validator.ValidateCondition(fieldRule.Condition)
-				if !valid {
-					errors = append(errors, ValidationError{
-						Filename:   filename,
-						LineNum:    lineNum,
-						FieldIndex: i + 1,
-						FieldName:  fieldRule.FieldName,
-						ErrorType:  "condition",
-						RuleOrType: fieldRule.Condition,
-						Message:    msg,
-						FieldValue: fieldValue,
-						FullLine:   line,
-					})
+					// 其他情况（必填字段或选填字段有值）
+					valid, msg := validator.ValidateCondition(fieldRule.Condition)
+					if !valid {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: i + 1,
+							FieldName:  fieldRule.FieldName,
+							ErrorType:  "condition",
+							RuleOrType: fieldRule.Condition,
+							Message:    msg,
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
+					}
 				}
 			}
 
