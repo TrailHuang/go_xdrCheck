@@ -644,8 +644,20 @@ func (x *XDRChecker) createResultDirectory() string {
 	dateStr := now.Format("20060102")
 	resultDir := filepath.Join("/tmp/xdr_check", dateStr)
 
-	// 创建目录（如果不存在）
-	os.MkdirAll(resultDir, 0755)
+	// 检查目录是否存在
+	if _, err := os.Stat(resultDir); err == nil {
+		// 目录存在，先清空目录
+		if err := os.RemoveAll(resultDir); err != nil {
+			// 清空失败，记录错误但继续创建目录
+			fmt.Printf("警告: 清空目录 %s 失败: %v\n", resultDir, err)
+		}
+	}
+
+	// 创建目录
+	if err := os.MkdirAll(resultDir, 0755); err != nil {
+		fmt.Printf("错误: 创建结果目录 %s 失败: %v\n", resultDir, err)
+		return ""
+	}
 
 	return resultDir
 }
@@ -741,7 +753,7 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			if fieldRule.Required == "选填" && fieldValue == "" {
 				// 如果有条件规则，需要验证条件
 				if fieldRule.Condition != "" {
-					validator := validator.NewRuleValidator(fieldValue, i, fields)
+					validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
 					valid, msg := validator.ValidateCondition(fieldRule.Condition)
 					if !valid {
 						errors = append(errors, ValidationError{
@@ -768,7 +780,7 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			}
 
 			// 校验字段
-			validator := validator.NewRuleValidator(fieldValue, i, fields)
+			validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
 
 			// 首先校验条件（如果有）
 			if fieldRule.Condition != "" {

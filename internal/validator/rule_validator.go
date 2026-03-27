@@ -11,16 +11,18 @@ import (
 )
 
 type RuleValidator struct {
-	FieldValue string
-	FieldIndex int
-	AllFields  []string
+	FieldValue     string
+	FieldIndex     int
+	AllFields      []string
+	FieldNumberMap map[string]int // 字段编号到索引的映射（如 "11" -> 索引）
 }
 
-func NewRuleValidator(fieldValue string, fieldIndex int, allFields []string) *RuleValidator {
+func NewRuleValidator(fieldValue string, fieldIndex int, allFields []string, fieldNumberMap map[string]int) *RuleValidator {
 	return &RuleValidator{
-		FieldValue: fieldValue,
-		FieldIndex: fieldIndex,
-		AllFields:  allFields,
+		FieldValue:     fieldValue,
+		FieldIndex:     fieldIndex,
+		AllFields:      allFields,
+		FieldNumberMap: fieldNumberMap,
 	}
 }
 
@@ -539,17 +541,17 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 	expectedValues := strings.TrimSpace(parts[1])
 
 	// 解析字段引用（如 $13）
-	fieldIndex, err := parseFieldReference(fieldRef)
+	fieldIndex, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
 
 	// 检查字段索引是否有效
-	if fieldIndex < 1 || fieldIndex > len(rv.AllFields) {
+	if fieldIndex < 0 || fieldIndex >= len(rv.AllFields) {
 		return true, "" // 字段索引超出范围，条件不满足
 	}
 
-	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex-1])
+	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex])
 
 	// 解析期望值（支持多个值，如 5,8）
 	expectedList := strings.Split(expectedValues, ",")
@@ -563,7 +565,7 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 		if actualValue == expected {
 			// 条件满足，当前字段必须有值
 			if rv.FieldValue == "" {
-				return false, fmt.Sprintf("当字段%d等于%s时，此字段不能为空", fieldIndex, expected)
+				return false, fmt.Sprintf("当字段%d等于%s时，此字段不能为空", fieldIndex+1, expected)
 			}
 			return true, ""
 		}
@@ -584,17 +586,17 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	expectedValue := strings.TrimSpace(parts[1])
 
 	// 解析字段引用
-	fieldIndex, err := parseFieldReference(fieldRef)
+	fieldIndex, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
 
 	// 检查字段索引是否有效
-	if fieldIndex < 1 || fieldIndex > len(rv.AllFields) {
+	if fieldIndex < 0 || fieldIndex >= len(rv.AllFields) {
 		return true, "" // 字段索引超出范围，条件不满足
 	}
 
-	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex-1])
+	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex])
 
 	// 处理字符串值
 	if strings.HasPrefix(expectedValue, "\"") && strings.HasSuffix(expectedValue, "\"") {
@@ -604,7 +606,7 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	if actualValue != expectedValue {
 		// 条件满足，当前字段必须有值
 		if rv.FieldValue == "" {
-			return false, fmt.Sprintf("当字段%d不等于%s时，此字段不能为空", fieldIndex, expectedValue)
+			return false, fmt.Sprintf("当字段%d不等于%s时，此字段不能为空", fieldIndex+1, expectedValue)
 		}
 		return true, ""
 	}
@@ -614,13 +616,23 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 }
 
 // parseFieldReference 解析字段引用（如 $13）
-func parseFieldReference(fieldRef string) (int, error) {
+func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, error) {
 	if !strings.HasPrefix(fieldRef, "$") {
 		return 0, fmt.Errorf("字段引用必须以$开头")
 	}
 
-	fieldIndexStr := strings.TrimPrefix(fieldRef, "$")
-	fieldIndex, err := strconv.Atoi(fieldIndexStr)
+	fieldNumberStr := strings.TrimPrefix(fieldRef, "$")
+
+	// 如果有字段编号映射，使用映射关系
+	if rv.FieldNumberMap != nil {
+		if fieldIndex, exists := rv.FieldNumberMap[fieldNumberStr]; exists {
+			return fieldIndex, nil
+		}
+		return 0, fmt.Errorf("字段编号%s在映射表中不存在", fieldNumberStr)
+	}
+
+	// 如果没有映射表，使用直接数字（向后兼容）
+	fieldIndex, err := strconv.Atoi(fieldNumberStr)
 	if err != nil {
 		return 0, fmt.Errorf("字段索引不是有效数字")
 	}

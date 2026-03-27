@@ -31,6 +31,7 @@ type SheetConfig struct {
 	SheetName      string
 	FieldRules     []FieldRule
 	FileValidation FileValidationConfig
+	FieldNumberMap map[string]int // 字段编号到索引的映射（如 "11" -> 索引）
 }
 
 func ParseExcelTemplate(filePath string) ([]SheetConfig, error) {
@@ -119,7 +120,8 @@ func parseFileValidationSheet(xlsx *excelize.File) []SheetConfig {
 
 func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 	config := SheetConfig{
-		SheetName: sheetName,
+		SheetName:      sheetName,
+		FieldNumberMap: make(map[string]int),
 	}
 
 	// 获取工作表的所有行
@@ -146,6 +148,12 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 			continue
 		}
 
+		// 获取字段编号（第一列）
+		fieldNumber := ""
+		if len(row) > 0 {
+			fieldNumber = strings.TrimSpace(row[0])
+		}
+
 		// 获取字段名
 		fieldName := ""
 		if fieldNameIndex, exists := colIndex["字段名"]; exists && fieldNameIndex < len(row) {
@@ -153,6 +161,11 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 		}
 		if fieldName == "" {
 			continue
+		}
+
+		// 建立字段编号到索引的映射
+		if fieldNumber != "" {
+			config.FieldNumberMap[fieldNumber] = len(config.FieldRules)
 		}
 
 		fieldRule := FieldRule{

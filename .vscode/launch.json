@@ -9,15 +9,15 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/main.go",
-            "args": [],
+            "program": "${workspaceFolder}/cmd/xdrcheck/main.go",
             "env": {
                 "GOPATH": "${workspaceFolder}"
             },
             "args": [
                 "-n",
                 "2",
-                "-o"
+                "-t",
+                "20260326"
             ]
         }
 

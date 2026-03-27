@@ -64,7 +64,7 @@ func testTypeValidation() {
 	}
 
 	for i, tc := range testCases {
-		validator := validator.NewRuleValidator(tc.fieldValue, 0, []string{})
+		validator := validator.NewRuleValidator(tc.fieldValue, 0, []string{}, nil)
 		valid, msg := validator.ValidateType(tc.dataType)
 
 		status := "✅ 通过"
@@ -108,7 +108,7 @@ func testConditionValidation() {
 	}
 
 	for i, tc := range testCases {
-		validator := validator.NewRuleValidator(tc.fieldValue, 0, tc.allFields)
+		validator := validator.NewRuleValidator(tc.fieldValue, 0, tc.allFields, nil)
 		valid, msg := validator.ValidateCondition(tc.condition)
 
 		status := "✅ 通过"
@@ -169,7 +169,7 @@ func testRuleValidation() {
 	}
 
 	for i, tc := range testCases {
-		validator := validator.NewRuleValidator(tc.fieldValue, 0, []string{})
+		validator := validator.NewRuleValidator(tc.fieldValue, 0, []string{}, nil)
 		valid, msg := validator.ValidateRule(tc.rule)
 
 		status := "✅ 通过"
@@ -234,7 +234,7 @@ func testComplexValidation() {
 	}
 
 	for i, tc := range testCases {
-		validator := validator.NewRuleValidator(tc.fieldValue, 0, tc.allFields)
+		validator := validator.NewRuleValidator(tc.fieldValue, 0, tc.allFields, nil)
 
 		// 验证类型
 		typeValid, typeMsg := validator.ValidateType(tc.typeRule)
