@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/user/go_xdrCheck/validator"
+	"xdrCheck/internal/validator"
 )
 
 func main() {

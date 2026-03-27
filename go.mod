@@ -1,4 +1,4 @@
-module github.com/user/go_xdrCheck
+module xdrCheck
 
 go 1.23
 
