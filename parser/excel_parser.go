@@ -9,9 +9,15 @@ import (
 
 type FieldRule struct {
 	FieldName string
-	Required  string // "必填" or "选填"
+	Required  string // "必填" or "选填" or "空"
 	Type      string // 数据类型 (int, ip, datetime, etc.)
 	Rules     []string
+	Condition string // 条件表达式，如 "if($13==5,8)"
+	Offset    string // 偏移规则，如 "offset(6,4)"
+	Array     string // 数组规则，如 "array(10,11,12)"
+	Loop      string // 循环规则，如 "loop(start=,)"
+	Jump      string // 跳转规则，如 "jump=1"
+	Regex     string // 正则表达式，如 "reg=[^ ]+"
 }
 
 type FileValidationConfig struct {
@@ -153,11 +159,26 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 			FieldName: fieldName,
 		}
 
-		// 获取属性（必填/选填）
+		// 获取属性（支持复杂规则）
 		if attrIndex, exists := colIndex["属性"]; exists && attrIndex < len(row) {
 			required := strings.TrimSpace(row[attrIndex])
-			if required == "必填" || required == "选填" {
-				fieldRule.Required = required
+
+			// 解析复杂规则
+			if strings.Contains(required, "|") {
+				// 分离基础属性和规则
+				parts := strings.Split(required, "|")
+				if len(parts) >= 2 {
+					fieldRule.Required = strings.TrimSpace(parts[0])
+
+					// 解析规则部分
+					rulePart := strings.TrimSpace(parts[1])
+					parseComplexRules(&fieldRule, rulePart)
+				}
+			} else {
+				// 简单规则：必填、选填、空
+				if required == "必填" || required == "选填" || required == "空" {
+					fieldRule.Required = required
+				}
 			}
 		}
 
@@ -315,4 +336,57 @@ func ParseFileTypeConfig(xlsx *excelize.File, sheetName string) ([]string, strin
 	}
 
 	return headers, suffix, sizeLimit, checkContent, nil
+}
+
+// parseComplexRules 解析复杂的条件规则
+func parseComplexRules(fieldRule *FieldRule, rulePart string) {
+	// 使用分号分隔多个规则
+	rules := strings.Split(rulePart, ";")
+
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+
+		// 解析条件规则
+		if strings.HasPrefix(rule, "if(") && strings.HasSuffix(rule, ")") {
+			fieldRule.Condition = rule
+		}
+
+		// 解析偏移规则
+		if strings.HasPrefix(rule, "offset(") && strings.HasSuffix(rule, ")") {
+			fieldRule.Offset = rule
+		}
+
+		// 解析数组规则
+		if strings.HasPrefix(rule, "array(") && strings.HasSuffix(rule, ")") {
+			fieldRule.Array = rule
+		}
+
+		// 解析循环规则
+		if strings.HasPrefix(rule, "loop(") && strings.HasSuffix(rule, ")") {
+			fieldRule.Loop = rule
+		}
+
+		// 解析跳转规则
+		if strings.HasPrefix(rule, "jump=") {
+			fieldRule.Jump = rule
+		}
+
+		// 解析正则规则
+		if strings.HasPrefix(rule, "reg=") {
+			fieldRule.Regex = strings.TrimPrefix(rule, "reg=")
+		}
+
+		// 解析类型规则
+		if strings.HasPrefix(rule, "type=") {
+			// 如果已经有类型，则合并
+			if fieldRule.Type != "" {
+				fieldRule.Type += "," + strings.TrimPrefix(rule, "type=")
+			} else {
+				fieldRule.Type = strings.TrimPrefix(rule, "type=")
+			}
+		}
+	}
 }

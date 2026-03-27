@@ -31,10 +31,26 @@ func (rv *RuleValidator) ValidateType(dataType string) (bool, string) {
 	switch dataType {
 	case "int":
 		return rv.validateInteger()
-	case "ip", "ipv4":
+	case "ip":
+		// ip类型同时支持IPv4和IPv6
+		if IsIPv4(rv.FieldValue) || IsIPv6(rv.FieldValue) {
+			return true, ""
+		}
+		return false, "不是有效的IP地址（IPv4或IPv6）"
+	case "ipv4":
 		return rv.validateIPv4()
 	case "ipv6":
 		return rv.validateIPv6()
+	case "ip_compressed":
+		if IsIPv6Compressed(rv.FieldValue) {
+			return true, ""
+		}
+		return false, "不是有效的IPv6压缩格式"
+	case "ip_exploded":
+		if IsIPv6Exploded(rv.FieldValue) {
+			return true, ""
+		}
+		return false, "不是有效的IPv6展开格式"
 	case "datetime":
 		return rv.validateDateTime()
 	case "base64":
@@ -449,6 +465,10 @@ func (rv *RuleValidator) validateEnum(rule string) (bool, string) {
 // 基础规则校验
 func (rv *RuleValidator) validateBasicRule(rule string) (bool, string) {
 	switch rule {
+	case "ip":
+		if !IsIPv4(rv.FieldValue) && !IsIPv6(rv.FieldValue) {
+			return false, "不是有效的IP地址（IPv4或IPv6）"
+		}
 	case "ipv4":
 		if !IsIPv4(rv.FieldValue) {
 			return false, "不是有效的IPv4地址"
@@ -456,6 +476,14 @@ func (rv *RuleValidator) validateBasicRule(rule string) (bool, string) {
 	case "ipv6":
 		if !IsIPv6(rv.FieldValue) {
 			return false, "不是有效的IPv6地址"
+		}
+	case "ip_compressed":
+		if !IsIPv6Compressed(rv.FieldValue) {
+			return false, "不是有效的IPv6压缩格式"
+		}
+	case "ip_exploded":
+		if !IsIPv6Exploded(rv.FieldValue) {
+			return false, "不是有效的IPv6展开格式"
 		}
 	case "base64":
 		if _, err := base64.StdEncoding.DecodeString(rv.FieldValue); err != nil {
@@ -473,4 +501,129 @@ func (rv *RuleValidator) validateBasicRule(rule string) (bool, string) {
 	}
 
 	return true, ""
+}
+
+// ValidateCondition 验证条件表达式
+func (rv *RuleValidator) ValidateCondition(condition string) (bool, string) {
+	if condition == "" {
+		return true, ""
+	}
+
+	// 解析条件表达式
+	if !strings.HasPrefix(condition, "if(") || !strings.HasSuffix(condition, ")") {
+		return false, "条件表达式格式错误"
+	}
+
+	// 提取条件内容
+	condContent := strings.TrimPrefix(condition, "if(")
+	condContent = strings.TrimSuffix(condContent, ")")
+
+	// 解析条件
+	if strings.Contains(condContent, "==") {
+		return rv.validateEqualCondition(condContent)
+	} else if strings.Contains(condContent, "!=") {
+		return rv.validateNotEqualCondition(condContent)
+	}
+
+	return false, "不支持的比较操作符"
+}
+
+// validateEqualCondition 验证等于条件
+func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, string) {
+	parts := strings.Split(condContent, "==")
+	if len(parts) != 2 {
+		return false, "等于条件格式错误"
+	}
+
+	fieldRef := strings.TrimSpace(parts[0])
+	expectedValues := strings.TrimSpace(parts[1])
+
+	// 解析字段引用（如 $13）
+	fieldIndex, err := parseFieldReference(fieldRef)
+	if err != nil {
+		return false, fmt.Sprintf("字段引用错误: %v", err)
+	}
+
+	// 检查字段索引是否有效
+	if fieldIndex < 1 || fieldIndex > len(rv.AllFields) {
+		return true, "" // 字段索引超出范围，条件不满足
+	}
+
+	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex-1])
+
+	// 解析期望值（支持多个值，如 5,8）
+	expectedList := strings.Split(expectedValues, ",")
+	for _, expected := range expectedList {
+		expected = strings.TrimSpace(expected)
+		// 处理字符串值（带引号的情况）
+		if strings.HasPrefix(expected, "\"") && strings.HasSuffix(expected, "\"") {
+			expected = strings.Trim(expected, "\"")
+		}
+
+		if actualValue == expected {
+			// 条件满足，当前字段必须有值
+			if rv.FieldValue == "" {
+				return false, fmt.Sprintf("当字段%d等于%s时，此字段不能为空", fieldIndex, expected)
+			}
+			return true, ""
+		}
+	}
+
+	// 条件不满足，不需要校验
+	return true, ""
+}
+
+// validateNotEqualCondition 验证不等于条件
+func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, string) {
+	parts := strings.Split(condContent, "!=")
+	if len(parts) != 2 {
+		return false, "不等于条件格式错误"
+	}
+
+	fieldRef := strings.TrimSpace(parts[0])
+	expectedValue := strings.TrimSpace(parts[1])
+
+	// 解析字段引用
+	fieldIndex, err := parseFieldReference(fieldRef)
+	if err != nil {
+		return false, fmt.Sprintf("字段引用错误: %v", err)
+	}
+
+	// 检查字段索引是否有效
+	if fieldIndex < 1 || fieldIndex > len(rv.AllFields) {
+		return true, "" // 字段索引超出范围，条件不满足
+	}
+
+	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex-1])
+
+	// 处理字符串值
+	if strings.HasPrefix(expectedValue, "\"") && strings.HasSuffix(expectedValue, "\"") {
+		expectedValue = strings.Trim(expectedValue, "\"")
+	}
+
+	if actualValue != expectedValue {
+		// 条件满足，当前字段必须有值
+		if rv.FieldValue == "" {
+			return false, fmt.Sprintf("当字段%d不等于%s时，此字段不能为空", fieldIndex, expectedValue)
+		}
+		return true, ""
+	}
+
+	// 条件不满足，不需要校验
+	return true, ""
+}
+
+// parseFieldReference 解析字段引用（如 $13）
+func parseFieldReference(fieldRef string) (int, error) {
+	if !strings.HasPrefix(fieldRef, "$") {
+		return 0, fmt.Errorf("字段引用必须以$开头")
+	}
+
+	fieldIndexStr := strings.TrimPrefix(fieldRef, "$")
+	fieldIndex, err := strconv.Atoi(fieldIndexStr)
+	if err != nil {
+		return 0, fmt.Errorf("字段索引不是有效数字")
+	}
+
+	return fieldIndex, nil
 }

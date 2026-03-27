@@ -737,15 +737,58 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			fieldValue := strings.TrimSpace(fields[i])
 
-			// 如果是选填字段且为空，跳过检查
+			// 如果是选填字段且为空，检查是否需要条件验证
 			if fieldRule.Required == "选填" && fieldValue == "" {
+				// 如果有条件规则，需要验证条件
+				if fieldRule.Condition != "" {
+					validator := validator.NewRuleValidator(fieldValue, i, fields)
+					valid, msg := validator.ValidateCondition(fieldRule.Condition)
+					if !valid {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: i + 1,
+							FieldName:  fieldRule.FieldName,
+							ErrorType:  "condition",
+							RuleOrType: fieldRule.Condition,
+							Message:    msg,
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
+					}
+				} else {
+					// 没有条件规则，直接跳过
+					continue
+				}
+			}
+
+			// 如果是空字段，跳过检查
+			if fieldRule.Required == "空" {
 				continue
 			}
 
 			// 校验字段
 			validator := validator.NewRuleValidator(fieldValue, i, fields)
 
-			// 首先校验类型
+			// 首先校验条件（如果有）
+			if fieldRule.Condition != "" {
+				valid, msg := validator.ValidateCondition(fieldRule.Condition)
+				if !valid {
+					errors = append(errors, ValidationError{
+						Filename:   filename,
+						LineNum:    lineNum,
+						FieldIndex: i + 1,
+						FieldName:  fieldRule.FieldName,
+						ErrorType:  "condition",
+						RuleOrType: fieldRule.Condition,
+						Message:    msg,
+						FieldValue: fieldValue,
+						FullLine:   line,
+					})
+				}
+			}
+
+			// 然后校验类型
 			if fieldRule.Type != "" {
 				valid, msg := validator.ValidateType(fieldRule.Type)
 				if !valid {
