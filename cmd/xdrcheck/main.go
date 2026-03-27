@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/user/go_xdrCheck/config"
-	"github.com/user/go_xdrCheck/core"
+	"github.com/user/go_xdrCheck/internal/config"
+	"github.com/user/go_xdrCheck/internal/core"
 
 	_ "net/http/pprof"
 

@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/user/go_xdrCheck/checker"
-	"github.com/user/go_xdrCheck/config"
-	"github.com/user/go_xdrCheck/parser"
-	"github.com/user/go_xdrCheck/validator"
+	"github.com/user/go_xdrCheck/internal/checker"
+	"github.com/user/go_xdrCheck/internal/config"
+	"github.com/user/go_xdrCheck/internal/parser"
+	"github.com/user/go_xdrCheck/internal/validator"
 )
 
 // ValidationError 定义校验错误结构体
