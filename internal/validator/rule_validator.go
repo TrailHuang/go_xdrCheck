@@ -632,10 +632,11 @@ func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, error) {
 	}
 
 	// 如果没有映射表，使用直接数字（向后兼容）
-	fieldIndex, err := strconv.Atoi(fieldNumberStr)
+	// Excel字段编号从1开始，数组索引从0开始，需要减1
+	fieldNumber, err := strconv.Atoi(fieldNumberStr)
 	if err != nil {
 		return 0, fmt.Errorf("字段索引不是有效数字")
 	}
 
-	return fieldIndex, nil
+	return fieldNumber, nil
 }

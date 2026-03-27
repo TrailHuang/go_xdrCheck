@@ -134,6 +134,7 @@ create_release_package() {
     # 复制配置文件
     cp -f *.ini "$release_dir/" 2>/dev/null || true
     cp -f *.txt "$release_dir/" 2>/dev/null || true
+    cp -f conf "$release_dir/" 2>/dev/null || true
     cp -f xdr_check_template-*.xlsx "$release_dir/" 2>/dev/null || true
 
     # 设置默认配置文件

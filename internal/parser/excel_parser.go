@@ -277,6 +277,7 @@ func mergeSheetConfigs(fileConfigs, sheetConfigs []SheetConfig) []SheetConfig {
 		// 合并字段规则配置
 		if sheetConfig, exists := sheetConfigMap[sheetName]; exists {
 			mergedConfig.FieldRules = sheetConfig.FieldRules
+			mergedConfig.FieldNumberMap = sheetConfig.FieldNumberMap
 		}
 
 		mergedConfigs = append(mergedConfigs, mergedConfig)
