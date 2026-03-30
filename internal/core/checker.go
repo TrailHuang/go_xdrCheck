@@ -649,9 +649,9 @@ func (x *XDRChecker) writeHTMLFormatErrors(writer *bufio.Writer, filename string
 	writer.WriteString("<body>\n")
 
 	if len(errors) == 0 {
-		writer.WriteString("<h1 class=\"success\">✅ 文件 " + filename + " 验证通过</h1>\n")
+		writer.WriteString("<h3 class=\"success\">✅ 文件 " + filename + " 验证通过</h3>\n")
 	} else {
-		writer.WriteString("<h1 class=\"error\">❌ 文件 " + filename + " 错误报告</h1>\n")
+		writer.WriteString("<h3 class=\"error\">❌ 文件 " + filename + " 错误报告</h3>\n")
 		writer.WriteString("<p>错误数量: " + fmt.Sprintf("%d", len(errors)) + "</p>\n")
 
 		// 生成表格
