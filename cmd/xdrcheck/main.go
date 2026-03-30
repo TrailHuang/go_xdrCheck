@@ -24,6 +24,7 @@ var (
 	checkNow  bool
 	noSubPath bool
 	workerNum int
+	format    string
 )
 
 func main() {
@@ -33,6 +34,7 @@ func main() {
 	pflag.BoolVarP(&checkNow, "now", "o", false, "now time")
 	pflag.BoolVarP(&noSubPath, "nosubpath", "p", false, "do not check sub path")
 	pflag.IntVarP(&workerNum, "routines", "r", 4, "number of worker routines (default: 4)")
+	pflag.StringVarP(&format, "format", "f", "txt", "report format: txt, table, html (default: txt)")
 	pflag.BoolP("help", "h", false, "help info")
 	pflag.BoolP("version", "v", false, "version info")
 
@@ -93,6 +95,7 @@ func printHelp() {
 	fmt.Println("-n,\t--num\t\t\tscan num per dir")
 	fmt.Println("-p,\t--nosubpath\t\tdo not check sub path")
 	fmt.Println("-r,\t--routines\t\tnumber of worker routines (default: 4)")
+	fmt.Println("-f,\t--format\t\treport format: txt, table, html (default: txt)")
 	fmt.Println("========================================================")
 }
 
@@ -111,7 +114,7 @@ func startCheck() error {
 	}
 
 	// 创建检查器
-	checker := core.NewXDRChecker(cfg, timeParam, scanNum, noSubPath, workerNum)
+	checker := core.NewXDRChecker(cfg, timeParam, scanNum, noSubPath, workerNum, format)
 
 	// 开始检查
 	return checker.StartCheck()

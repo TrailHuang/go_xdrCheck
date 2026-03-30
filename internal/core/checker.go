@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,31 @@ import (
 	"xdrCheck/internal/config"
 	"xdrCheck/internal/parser"
 	"xdrCheck/internal/validator"
+
+	"github.com/olekukonko/tablewriter"
 )
+
+// TableReportConfig 表格报告配置
+type TableReportConfig struct {
+	ShowFileName   bool // 显示文件名
+	ShowLineNumber bool // 显示行号
+	ShowFieldValue bool // 显示字段值
+	ShowErrorType  bool // 显示错误类型
+	ShowCondition  bool // 显示条件规则
+	MaxColumnWidth int  // 最大列宽
+}
+
+// DefaultTableReportConfig 默认表格报告配置
+func DefaultTableReportConfig() TableReportConfig {
+	return TableReportConfig{
+		ShowFileName:   true,
+		ShowLineNumber: true,
+		ShowFieldValue: true,
+		ShowErrorType:  true,
+		ShowCondition:  true,
+		MaxColumnWidth: 30,
+	}
+}
 
 // ValidationError 定义校验错误结构体
 type ValidationError struct {
@@ -51,27 +76,34 @@ type CheckResult struct {
 }
 
 type XDRChecker struct {
-	Config     *config.Config
-	TimeParam  string
-	ScanNum    int
-	NoSubPath  bool
-	ResultFile *os.File
-	mu         sync.Mutex
-	WorkerNum  int // 协程数，默认4
+	Config       *config.Config
+	TimeParam    string
+	ScanNum      int
+	NoSubPath    bool
+	ResultFile   *os.File
+	mu           sync.Mutex
+	WorkerNum    int    // 协程数，默认4
+	ReportFormat string // 报告格式：txt, table, html
 }
 
-func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int) *XDRChecker {
+func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int, reportFormat string) *XDRChecker {
 	// 如果workerNum为0或负数，使用默认值4
 	if workerNum <= 0 {
 		workerNum = 4
 	}
 
+	// 验证报告格式
+	if reportFormat != "txt" && reportFormat != "table" && reportFormat != "html" {
+		reportFormat = "txt" // 默认格式
+	}
+
 	return &XDRChecker{
-		Config:    cfg,
-		TimeParam: timeParam,
-		ScanNum:   scanNum,
-		NoSubPath: noSubPath,
-		WorkerNum: workerNum,
+		Config:       cfg,
+		TimeParam:    timeParam,
+		ScanNum:      scanNum,
+		NoSubPath:    noSubPath,
+		WorkerNum:    workerNum,
+		ReportFormat: reportFormat,
 	}
 }
 
@@ -514,6 +546,19 @@ func normalizeSheetName(name string) string {
 
 // 格式化输出错误信息
 func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string, errors []ValidationError) {
+	// 根据报告格式选择输出方式
+	switch x.ReportFormat {
+	case "table":
+		x.writeTableFormatErrors(writer, filename, errors)
+	case "html":
+		x.writeHTMLFormatErrors(writer, filename, errors)
+	default: // txt 格式
+		x.writeTextFormatErrors(writer, filename, errors)
+	}
+}
+
+// 文本格式输出错误信息
+func (x *XDRChecker) writeTextFormatErrors(writer *bufio.Writer, filename string, errors []ValidationError) {
 	// 写入文件头
 	writer.WriteString(fmt.Sprintf("错误文件:%s \n", filename))
 	writer.WriteString(" \n")
@@ -555,6 +600,345 @@ func (x *XDRChecker) writeFormattedErrors(writer *bufio.Writer, filename string,
 	writer.WriteString(" \n")
 	writer.WriteString("---------------------------------------------------------------------------------- \n")
 	writer.WriteString(" \n")
+}
+
+// 表格格式输出错误信息
+func (x *XDRChecker) writeTableFormatErrors(writer *bufio.Writer, filename string, errors []ValidationError) {
+	if len(errors) == 0 {
+		writer.WriteString(fmt.Sprintf("✅ 文件 %s 验证通过，无错误信息\n", filename))
+		return
+	}
+
+	// 创建表格
+	table := tablewriter.NewWriter(writer)
+	table.Header("字段名", "错误类型", "错误信息", "字段值", "行号")
+
+	// 添加数据行
+	for _, err := range errors {
+		table.Append(err.FieldName, err.ErrorType, err.Message, err.FieldValue, strconv.Itoa(err.LineNum))
+	}
+
+	// 写入文件标题
+	writer.WriteString(fmt.Sprintf("文件: %s\n", filename))
+	writer.WriteString(fmt.Sprintf("错误数量: %d\n", len(errors)))
+	writer.WriteString("\n")
+
+	// 渲染表格
+	table.Render()
+	writer.WriteString("\n")
+}
+
+// HTML格式输出错误信息（基础版本）
+func (x *XDRChecker) writeHTMLFormatErrors(writer *bufio.Writer, filename string, errors []ValidationError) {
+	writer.WriteString("<!DOCTYPE html>\n")
+	writer.WriteString("<html>\n")
+	writer.WriteString("<head>\n")
+	writer.WriteString("<meta charset=\"UTF-8\">\n")
+	writer.WriteString("<title>XDR检查报告 - " + filename + "</title>\n")
+	writer.WriteString("<style>\n")
+	writer.WriteString("body { font-family: Arial, sans-serif; margin: 20px; }\n")
+	writer.WriteString("h1 { color: #333; }\n")
+	writer.WriteString("table { border-collapse: collapse; width: 100%; margin: 20px 0; }\n")
+	writer.WriteString("th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n")
+	writer.WriteString("th { background-color: #f2f2f2; }\n")
+	writer.WriteString("tr:nth-child(even) { background-color: #f9f9f9; }\n")
+	writer.WriteString(".error { color: red; }\n")
+	writer.WriteString(".success { color: green; }\n")
+	writer.WriteString("</style>\n")
+	writer.WriteString("</head>\n")
+	writer.WriteString("<body>\n")
+
+	if len(errors) == 0 {
+		writer.WriteString("<h1 class=\"success\">✅ 文件 " + filename + " 验证通过</h1>\n")
+	} else {
+		writer.WriteString("<h1 class=\"error\">❌ 文件 " + filename + " 错误报告</h1>\n")
+		writer.WriteString("<p>错误数量: " + fmt.Sprintf("%d", len(errors)) + "</p>\n")
+
+		// 生成表格
+		writer.WriteString("<table>\n")
+		writer.WriteString("<tr><th>字段名</th><th>错误信息</th><th>行号</th></tr>\n")
+
+		for _, err := range errors {
+			writer.WriteString(fmt.Sprintf("<tr><td>%s</td><td class=\"error\">%s</td><td>%d</td></tr>\n",
+				err.FieldName, err.Message, err.LineNum))
+		}
+
+		writer.WriteString("</table>\n")
+	}
+
+	writer.WriteString("</body>\n")
+	writer.WriteString("</html>\n")
+}
+
+// GenerateTableReport 生成表格化详细报告
+func (x *XDRChecker) GenerateTableReport(errors []ValidationError) (string, error) {
+	config := DefaultTableReportConfig()
+	return x.GenerateTableReportWithConfig(errors, config)
+}
+
+// GenerateTableReportWithConfig 使用自定义配置生成表格化详细报告
+func (x *XDRChecker) GenerateTableReportWithConfig(errors []ValidationError, config TableReportConfig) (string, error) {
+	if len(errors) == 0 {
+		return "✅ 所有文件验证通过，无错误信息", nil
+	}
+
+	var report strings.Builder
+
+	// 生成报告头部
+	report.WriteString(x.generateTableHeader(config))
+	report.WriteString("\n")
+
+	// 按文件名分组错误
+	errorGroups := x.groupErrorsByFile(errors)
+
+	// 生成表格内容
+	for filename, fileErrors := range errorGroups {
+		// 文件名标题
+		report.WriteString(fmt.Sprintf("📄 文件: %s\n", filepath.Base(filename)))
+		report.WriteString(x.generateTableSeparator(config))
+		report.WriteString("\n")
+
+		// 表格内容
+		for _, err := range fileErrors {
+			report.WriteString(x.generateTableRow(err, config))
+			report.WriteString("\n")
+		}
+
+		report.WriteString("\n")
+	}
+
+	// 生成统计信息
+	report.WriteString(x.generateStatistics(errors))
+
+	return report.String(), nil
+}
+
+// generateTableHeader 生成表格头部
+func (x *XDRChecker) generateTableHeader(config TableReportConfig) string {
+	var header strings.Builder
+	var columns []string
+
+	// 构建列标题
+	if config.ShowFileName {
+		columns = append(columns, "文件名")
+	}
+	if config.ShowLineNumber {
+		columns = append(columns, "行号")
+	}
+	columns = append(columns, "字段名")
+	if config.ShowFieldValue {
+		columns = append(columns, "字段值")
+	}
+	if config.ShowErrorType {
+		columns = append(columns, "错误类型")
+	}
+	columns = append(columns, "错误描述")
+	if config.ShowCondition {
+		columns = append(columns, "条件规则")
+	}
+
+	// 生成表头
+	for i, col := range columns {
+		width := x.calculateColumnWidth(col, config)
+		if i == 0 {
+			header.WriteString("│ ")
+		} else {
+			header.WriteString(" │ ")
+		}
+		header.WriteString(fmt.Sprintf("%-*s", width, col))
+	}
+	header.WriteString(" │")
+
+	return header.String()
+}
+
+// generateTableSeparator 生成表格分隔线
+func (x *XDRChecker) generateTableSeparator(config TableReportConfig) string {
+	var separator strings.Builder
+	var columns []string
+
+	// 构建列标题（用于计算宽度）
+	if config.ShowFileName {
+		columns = append(columns, "文件名")
+	}
+	if config.ShowLineNumber {
+		columns = append(columns, "行号")
+	}
+	columns = append(columns, "字段名")
+	if config.ShowFieldValue {
+		columns = append(columns, "字段值")
+	}
+	if config.ShowErrorType {
+		columns = append(columns, "错误类型")
+	}
+	columns = append(columns, "错误描述")
+	if config.ShowCondition {
+		columns = append(columns, "条件规则")
+	}
+
+	// 生成分隔线
+	for i, col := range columns {
+		width := x.calculateColumnWidth(col, config)
+		if i == 0 {
+			separator.WriteString("├─")
+		} else {
+			separator.WriteString("─┼─")
+		}
+		separator.WriteString(strings.Repeat("─", width))
+	}
+	separator.WriteString("─┤")
+
+	return separator.String()
+}
+
+// generateTableRow 生成表格行
+func (x *XDRChecker) generateTableRow(err ValidationError, config TableReportConfig) string {
+	var row strings.Builder
+
+	// 文件名
+	if config.ShowFileName {
+		filename := filepath.Base(err.Filename)
+		width := x.calculateColumnWidth("文件名", config)
+		row.WriteString(fmt.Sprintf("│ %-*s", width, x.truncateString(filename, width)))
+	}
+
+	// 行号
+	if config.ShowLineNumber {
+		lineNum := fmt.Sprintf("%d", err.LineNum)
+		width := x.calculateColumnWidth("行号", config)
+		if config.ShowFileName {
+			row.WriteString(" │ ")
+		} else {
+			row.WriteString("│ ")
+		}
+		row.WriteString(fmt.Sprintf("%-*s", width, lineNum))
+	}
+
+	// 字段名
+	fieldName := err.FieldName
+	width := x.calculateColumnWidth("字段名", config)
+	if config.ShowFileName || config.ShowLineNumber {
+		row.WriteString(" │ ")
+	} else {
+		row.WriteString("│ ")
+	}
+	row.WriteString(fmt.Sprintf("%-*s", width, fieldName))
+
+	// 字段值
+	if config.ShowFieldValue {
+		fieldValue := err.FieldValue
+		if fieldValue == "" {
+			fieldValue = "<空>"
+		}
+		width := x.calculateColumnWidth("字段值", config)
+		row.WriteString(fmt.Sprintf(" │ %-*s", width, x.truncateString(fieldValue, width)))
+	}
+
+	// 错误类型
+	if config.ShowErrorType {
+		errorType := x.translateErrorType(err.ErrorType)
+		width := x.calculateColumnWidth("错误类型", config)
+		row.WriteString(fmt.Sprintf(" │ %-*s", width, errorType))
+	}
+
+	// 错误描述
+	errorDesc := err.Message
+	errorDescWidth := x.calculateColumnWidth("错误描述", config)
+	row.WriteString(fmt.Sprintf(" │ %-*s", errorDescWidth, x.truncateString(errorDesc, errorDescWidth)))
+
+	// 条件规则
+	if config.ShowCondition && err.RuleOrType != "" {
+		rule := err.RuleOrType
+		ruleWidth := x.calculateColumnWidth("条件规则", config)
+		row.WriteString(fmt.Sprintf(" │ %-*s", ruleWidth, x.truncateString(rule, ruleWidth)))
+	}
+
+	row.WriteString(" │")
+
+	return row.String()
+}
+
+// generateStatistics 生成统计信息
+func (x *XDRChecker) generateStatistics(errors []ValidationError) string {
+	var stats strings.Builder
+	stats.WriteString("📊 错误统计信息\n")
+	stats.WriteString("─────────────────────────────────────────────\n")
+
+	// 按错误类型统计
+	typeCount := make(map[string]int)
+	fileCount := make(map[string]bool)
+	fieldCount := make(map[string]bool)
+
+	for _, err := range errors {
+		typeCount[err.ErrorType]++
+		fileCount[err.Filename] = true
+		fieldCount[err.FieldName] = true
+	}
+
+	stats.WriteString(fmt.Sprintf("总错误数: %d\n", len(errors)))
+	stats.WriteString(fmt.Sprintf("涉及文件: %d\n", len(fileCount)))
+	stats.WriteString(fmt.Sprintf("涉及字段: %d\n", len(fieldCount)))
+	stats.WriteString("\n错误类型分布:\n")
+
+	for errType, count := range typeCount {
+		stats.WriteString(fmt.Sprintf("  • %s: %d\n", x.translateErrorType(errType), count))
+	}
+
+	return stats.String()
+}
+
+// groupErrorsByFile 按文件名分组错误
+func (x *XDRChecker) groupErrorsByFile(errors []ValidationError) map[string][]ValidationError {
+	groups := make(map[string][]ValidationError)
+	for _, err := range errors {
+		groups[err.Filename] = append(groups[err.Filename], err)
+	}
+	return groups
+}
+
+// calculateColumnWidth 计算列宽
+func (x *XDRChecker) calculateColumnWidth(columnName string, config TableReportConfig) int {
+	baseWidths := map[string]int{
+		"文件名":  20,
+		"行号":   6,
+		"字段名":  12,
+		"字段值":  15,
+		"错误类型": 8,
+		"错误描述": 25,
+		"条件规则": 20,
+	}
+
+	width, exists := baseWidths[columnName]
+	if !exists {
+		width = 15
+	}
+
+	if width > config.MaxColumnWidth {
+		return config.MaxColumnWidth
+	}
+	return width
+}
+
+// truncateString 截断字符串
+func (x *XDRChecker) truncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+	return s[:maxLength-3] + "..."
+}
+
+// translateErrorType 翻译错误类型
+func (x *XDRChecker) translateErrorType(errorType string) string {
+	translations := map[string]string{
+		"condition": "条件错误",
+		"type":      "类型错误",
+		"rule":      "规则错误",
+	}
+
+	if translated, exists := translations[errorType]; exists {
+		return translated
+	}
+	return errorType
 }
 
 // 按行号分组错误
@@ -800,37 +1184,47 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			// 然后校验类型
 			if fieldRule.Type != "" {
-				valid, msg := validator.ValidateType(fieldRule.Type)
-				if !valid {
-					errors = append(errors, ValidationError{
-						Filename:   filename,
-						LineNum:    lineNum,
-						FieldIndex: i + 1,
-						FieldName:  fieldRule.FieldName,
-						ErrorType:  "type",
-						RuleOrType: fieldRule.Type,
-						Message:    msg,
-						FieldValue: fieldValue,
-						FullLine:   line,
-					})
+				// 对于选填字段且为空的情况，跳过类型校验
+				if fieldRule.Required == "选填" && fieldValue == "" && fieldRule.Condition == "" {
+					// 选填字段为空且无条件规则时，跳过类型校验
+				} else {
+					valid, msg := validator.ValidateType(fieldRule.Type)
+					if !valid {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: i + 1,
+							FieldName:  fieldRule.FieldName,
+							ErrorType:  "type",
+							RuleOrType: fieldRule.Type,
+							Message:    msg,
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
+					}
 				}
 			}
 
 			// 然后校验其他规则
 			for _, rule := range fieldRule.Rules {
-				valid, msg := validator.ValidateRule(rule)
-				if !valid {
-					errors = append(errors, ValidationError{
-						Filename:   filename,
-						LineNum:    lineNum,
-						FieldIndex: i + 1,
-						FieldName:  fieldRule.FieldName,
-						ErrorType:  "rule",
-						RuleOrType: rule,
-						Message:    msg,
-						FieldValue: fieldValue,
-						FullLine:   line,
-					})
+				// 对于选填字段且为空的情况，跳过规则校验
+				if fieldRule.Required == "选填" && fieldValue == "" && fieldRule.Condition == "" {
+					// 选填字段为空且无条件规则时，跳过规则校验
+				} else {
+					valid, msg := validator.ValidateRule(rule)
+					if !valid {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: i + 1,
+							FieldName:  fieldRule.FieldName,
+							ErrorType:  "rule",
+							RuleOrType: rule,
+							Message:    msg,
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
+					}
 				}
 			}
 		}
@@ -947,11 +1341,53 @@ func (x *XDRChecker) createResultFile() (*os.File, error) {
 		return nil, err
 	}
 
-	resultFile := filepath.Join(resultDir, "check_result.txt")
+	// 根据报告格式确定文件后缀
+	fileExt := ".txt"
+	if x.ReportFormat == "html" {
+		fileExt = ".html"
+	}
+
+	resultFile := filepath.Join(resultDir, "check_result"+fileExt)
 	file, err := os.Create(resultFile)
 	if err != nil {
 		return nil, err
 	}
+
+	// 写入文件头
+	writer := bufio.NewWriter(file)
+
+	// 根据格式写入不同的文件头
+	switch x.ReportFormat {
+	case "html":
+		writer.WriteString("<!DOCTYPE html>\n")
+		writer.WriteString("<html>\n")
+		writer.WriteString("<head>\n")
+		writer.WriteString("<meta charset=\"UTF-8\">\n")
+		writer.WriteString("<title>XDR检查结果报告</title>\n")
+		writer.WriteString("<style>\n")
+		writer.WriteString("body { font-family: Arial, sans-serif; margin: 20px; }\n")
+		writer.WriteString("h1 { color: #333; }\n")
+		writer.WriteString("table { border-collapse: collapse; width: 100%; margin: 20px 0; }\n")
+		writer.WriteString("th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n")
+		writer.WriteString("th { background-color: #f2f2f2; }\n")
+		writer.WriteString("tr:nth-child(even) { background-color: #f9f9f9; }\n")
+		writer.WriteString(".error { color: red; }\n")
+		writer.WriteString(".success { color: green; }\n")
+		writer.WriteString("</style>\n")
+		writer.WriteString("</head>\n")
+		writer.WriteString("<body>\n")
+		writer.WriteString("<h1>XDR检查结果报告</h1>\n")
+		writer.WriteString("<p>生成时间: " + time.Now().Format("2006-01-02 15:04:05") + "</p>\n")
+		writer.WriteString("<p>检查时间: " + x.TimeParam + "</p>\n")
+		writer.WriteString("<hr>\n")
+	default:
+		writer.WriteString("XDR检查结果报告\n")
+		writer.WriteString("生成时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
+		writer.WriteString("检查时间: " + x.TimeParam + "\n")
+		writer.WriteString("\n")
+	}
+
+	writer.Flush()
 
 	return file, nil
 }
