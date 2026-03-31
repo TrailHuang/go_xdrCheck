@@ -10,6 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/xdrcheck/main.go",
+            //"program": "${workspaceFolder}/test/test_validation.go",
             "env": {
                 "GOPATH": "${workspaceFolder}"
             },
