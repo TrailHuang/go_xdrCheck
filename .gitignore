@@ -2,3 +2,11 @@ xdr_check_optimized
 xdrcheck
 XDR_CHECK_VERSION.txt
 xdr_check
+.vscode/launch.json
+xdr_check_tools/run_xdr_check.sh
+xdr_check_tools/VERSION
+xdr_check_tools/xdr_check_template-ctcc.xlsx
+xdr_check_tools/xdr_check.ini
+AGENTS.md
+.gitignore
+xdr_check_linux_multiarch_v1.1.18.tar.gz
