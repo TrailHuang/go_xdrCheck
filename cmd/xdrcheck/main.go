@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"time"
 
 	"xdrCheck/internal/config"
@@ -77,6 +78,26 @@ func main() {
 
 	go func() {
 		http.ListenAndServe("127.0.0.1:8899", nil)
+	}()
+
+	// 性能分析: CPU profile
+	cpuProfile, err := os.Create("cpu_profile.prof")
+	if err != nil {
+		fmt.Printf("创建CPU profile文件失败: %v\n", err)
+		return
+	}
+	pprof.StartCPUProfile(cpuProfile)
+	defer pprof.StopCPUProfile()
+
+	// 性能分析: 内存 profile
+	defer func() {
+		memProfile, err := os.Create("mem_profile.prof")
+		if err != nil {
+			fmt.Printf("创建内存profile文件失败: %v\n", err)
+			return
+		}
+		pprof.WriteHeapProfile(memProfile)
+		memProfile.Close()
 	}()
 
 	// 启动主程序

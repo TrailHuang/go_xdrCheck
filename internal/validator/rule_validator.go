@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -371,7 +370,7 @@ func (rv *RuleValidator) validateSizeLessEqual(rule string) (bool, string) {
 // 正则表达式校验
 func (rv *RuleValidator) validateRegex(rule string) (bool, string) {
 	pattern := strings.TrimPrefix(rule, "reg=")
-	re, err := regexp.Compile(pattern)
+	re, err := GetRegex(pattern)
 	if err != nil {
 		return false, "正则表达式格式错误"
 	}
