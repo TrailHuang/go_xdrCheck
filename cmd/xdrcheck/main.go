@@ -113,8 +113,18 @@ func startCheck() error {
 		return fmt.Errorf("加载配置文件失败: %v", err)
 	}
 
+	// 创建检查器配置
+	checkerConfig := core.CheckerConfig{
+		Config:       cfg,
+		TimeParam:    timeParam,
+		ScanNum:      scanNum,
+		NoSubPath:    noSubPath,
+		WorkerNum:    workerNum,
+		ReportFormat: format,
+	}
+
 	// 创建检查器
-	checker := core.NewXDRChecker(cfg, timeParam, scanNum, noSubPath, workerNum, format)
+	checker := core.NewXDRChecker(checkerConfig)
 
 	// 开始检查
 	return checker.StartCheck()

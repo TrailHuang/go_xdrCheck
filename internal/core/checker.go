@@ -22,6 +22,16 @@ import (
 	"github.com/olekukonko/tablewriter"
 )
 
+// CheckerConfig 检查器配置结构体
+type CheckerConfig struct {
+	Config       *config.Config // 配置文件
+	TimeParam    string         // 时间参数
+	ScanNum      int            // 扫描数量
+	NoSubPath    bool           // 是否检查子路径
+	WorkerNum    int            // 协程数
+	ReportFormat string         // 报告格式
+}
+
 // TableReportConfig 表格报告配置
 type TableReportConfig struct {
 	ShowFileName   bool // 显示文件名
@@ -86,18 +96,31 @@ type XDRChecker struct {
 	ReportFormat string // 报告格式：txt, table, html
 }
 
-func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int, reportFormat string) *XDRChecker {
+// NewXDRChecker 创建新的XDR检查器（使用结构体参数）
+func NewXDRChecker(config CheckerConfig) *XDRChecker {
 	// 如果workerNum为0或负数，使用默认值4
-	if workerNum <= 0 {
-		workerNum = 4
+	if config.WorkerNum <= 0 {
+		config.WorkerNum = 4
 	}
 
 	// 验证报告格式
-	if reportFormat != "txt" && reportFormat != "table" && reportFormat != "html" {
-		reportFormat = "txt" // 默认格式
+	if config.ReportFormat != "txt" && config.ReportFormat != "table" && config.ReportFormat != "html" {
+		config.ReportFormat = "txt" // 默认格式
 	}
 
 	return &XDRChecker{
+		Config:       config.Config,
+		TimeParam:    config.TimeParam,
+		ScanNum:      config.ScanNum,
+		NoSubPath:    config.NoSubPath,
+		WorkerNum:    config.WorkerNum,
+		ReportFormat: config.ReportFormat,
+	}
+}
+
+// NewXDRCheckerLegacy 向后兼容的创建函数（保持原有参数）
+func NewXDRCheckerLegacy(cfg *config.Config, timeParam string, scanNum int, noSubPath bool, workerNum int, reportFormat string) *XDRChecker {
+	config := CheckerConfig{
 		Config:       cfg,
 		TimeParam:    timeParam,
 		ScanNum:      scanNum,
@@ -105,6 +128,7 @@ func NewXDRChecker(cfg *config.Config, timeParam string, scanNum int, noSubPath 
 		WorkerNum:    workerNum,
 		ReportFormat: reportFormat,
 	}
+	return NewXDRChecker(config)
 }
 
 func (x *XDRChecker) StartCheck() error {
