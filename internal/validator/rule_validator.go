@@ -187,26 +187,26 @@ func (rv *RuleValidator) validateSingleRule(rule string) (bool, string) {
 	rule = strings.ReplaceAll(rule, " ", "")
 
 	switch {
+	case strings.HasPrefix(rule, "len>="):
+		return rv.validateLengthGreaterEqual(rule)
+	case strings.HasPrefix(rule, "len<="):
+		return rv.validateLengthLessEqual(rule)
 	case strings.HasPrefix(rule, "len="):
 		return rv.validateLengthEqual(rule)
 	case strings.HasPrefix(rule, "len>"):
 		return rv.validateLengthGreater(rule)
 	case strings.HasPrefix(rule, "len<"):
 		return rv.validateLengthLess(rule)
-	case strings.HasPrefix(rule, "len>="):
-		return rv.validateLengthGreaterEqual(rule)
-	case strings.HasPrefix(rule, "len<="):
-		return rv.validateLengthLessEqual(rule)
+	case strings.HasPrefix(rule, "size>="):
+		return rv.validateSizeGreaterEqual(rule)
+	case strings.HasPrefix(rule, "size<="):
+		return rv.validateSizeLessEqual(rule)
 	case strings.HasPrefix(rule, "size="):
 		return rv.validateSizeEqual(rule)
 	case strings.HasPrefix(rule, "size>"):
 		return rv.validateSizeGreater(rule)
 	case strings.HasPrefix(rule, "size<"):
 		return rv.validateSizeLess(rule)
-	case strings.HasPrefix(rule, "size>="):
-		return rv.validateSizeGreaterEqual(rule)
-	case strings.HasPrefix(rule, "size<="):
-		return rv.validateSizeLessEqual(rule)
 	case strings.HasPrefix(rule, "reg="):
 		return rv.validateRegex(rule)
 	case strings.HasPrefix(rule, "json_field="):

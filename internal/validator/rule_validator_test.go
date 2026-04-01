@@ -4,6 +4,440 @@ import (
 	"testing"
 )
 
+// 测试基础数据类型验证
+func TestValidateBasicTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		fieldValue string
+		dataType   string
+		want       bool
+		wantMsg    string
+	}{
+		// int类型测试
+		{
+			name:       "int有效",
+			fieldValue: "123",
+			dataType:   "int",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "int无效",
+			fieldValue: "abc",
+			dataType:   "int",
+			want:       false,
+			wantMsg:    "不是有效的整数",
+		},
+		{
+			name:       "int负数",
+			fieldValue: "-123",
+			dataType:   "int",
+			want:       true,
+			wantMsg:    "",
+		},
+
+		// IPv4类型测试
+		{
+			name:       "IPv4有效",
+			fieldValue: "192.168.1.1",
+			dataType:   "ip",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "IPv4无效",
+			fieldValue: "256.168.1.1",
+			dataType:   "ip",
+			want:       false,
+			wantMsg:    "不是有效的IP地址（IPv4或IPv6）",
+		},
+
+		// IPv6类型测试
+		{
+			name:       "IPv6有效",
+			fieldValue: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			dataType:   "ip",
+			want:       true,
+			wantMsg:    "",
+		},
+
+		// datetime类型测试
+		{
+			name:       "datetime有效",
+			fieldValue: "2023-01-01 12:00:00",
+			dataType:   "datetime",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "datetime无效",
+			fieldValue: "2023-13-01 12:00:00",
+			dataType:   "datetime",
+			want:       false,
+			wantMsg:    "不是有效的日期时间格式 (yyyy-MM-dd HH:mm:ss)",
+		},
+
+		// base64类型测试
+		{
+			name:       "base64有效",
+			fieldValue: "aGVsbG8=",
+			dataType:   "base64",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "base64无效",
+			fieldValue: "!!!",
+			dataType:   "base64",
+			want:       false,
+			wantMsg:    "不是有效的Base64编码",
+		},
+
+		// json类型测试
+		{
+			name:       "json有效",
+			fieldValue: `{"name":"test"}`,
+			dataType:   "json",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "json无效",
+			fieldValue: `{"name":"test"`,
+			dataType:   "json",
+			want:       false,
+			wantMsg:    "不是有效的JSON格式",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &RuleValidator{
+				FieldValue: tt.fieldValue,
+			}
+
+			got, gotMsg := rv.ValidateType(tt.dataType)
+
+			if got != tt.want {
+				t.Errorf("ValidateType(%s) got = %v, want %v", tt.dataType, got, tt.want)
+			}
+
+			if gotMsg != tt.wantMsg {
+				t.Errorf("ValidateType(%s) gotMsg = %v, want %v", tt.dataType, gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// 测试长度验证规则
+func TestValidateLengthRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		fieldValue string
+		rule       string
+		want       bool
+		wantMsg    string
+	}{
+		// len_eq规则
+		{
+			name:       "len_eq匹配",
+			fieldValue: "abc",
+			rule:       "len=3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_eq不匹配",
+			fieldValue: "abc",
+			rule:       "len=5",
+			want:       false,
+			wantMsg:    "长度应为5，实际为3",
+		},
+
+		// len_gt规则
+		{
+			name:       "len_gt匹配",
+			fieldValue: "abcde",
+			rule:       "len>3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_gt不匹配",
+			fieldValue: "abc",
+			rule:       "len>5",
+			want:       false,
+			wantMsg:    "长度应大于5，实际为3",
+		},
+
+		// len_lt规则
+		{
+			name:       "len_lt匹配",
+			fieldValue: "abc",
+			rule:       "len<5",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_lt不匹配",
+			fieldValue: "abcde",
+			rule:       "len<3",
+			want:       false,
+			wantMsg:    "长度应小于3，实际为5",
+		},
+
+		// len_ge规则
+		{
+			name:       "len_ge匹配等于",
+			fieldValue: "abc",
+			rule:       "len>=3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_ge匹配大于",
+			fieldValue: "abcde",
+			rule:       "len>=3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_ge不匹配",
+			fieldValue: "ab",
+			rule:       "len>=3",
+			want:       false,
+			wantMsg:    "长度应大于等于3，实际为2",
+		},
+
+		// len_le规则
+		{
+			name:       "len_le匹配等于",
+			fieldValue: "abc",
+			rule:       "len<=3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_le匹配小于",
+			fieldValue: "ab",
+			rule:       "len<=3",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "len_le不匹配",
+			fieldValue: "abcde",
+			rule:       "len<=3",
+			want:       false,
+			wantMsg:    "长度应小于等于3，实际为5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &RuleValidator{
+				FieldValue: tt.fieldValue,
+			}
+
+			got, gotMsg := rv.ValidateRule(tt.rule)
+
+			if got != tt.want {
+				t.Errorf("ValidateRule(%s) got = %v, want %v", tt.rule, got, tt.want)
+			}
+
+			if gotMsg != tt.wantMsg {
+				t.Errorf("ValidateRule(%s) gotMsg = %v, want %v", tt.rule, gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// 测试范围验证规则
+func TestValidateRangeRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		fieldValue string
+		rule       string
+		want       bool
+		wantMsg    string
+	}{
+		// range规则
+		{
+			name:       "range匹配最小值",
+			fieldValue: "1",
+			rule:       "1-5",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "range匹配中间值",
+			fieldValue: "3",
+			rule:       "1-5",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "range匹配最大值",
+			fieldValue: "5",
+			rule:       "1-5",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "range不匹配小于",
+			fieldValue: "0",
+			rule:       "1-5",
+			want:       false,
+			wantMsg:    "值应在1-5范围内，实际为0",
+		},
+		{
+			name:       "range不匹配大于",
+			fieldValue: "6",
+			rule:       "1-5",
+			want:       false,
+			wantMsg:    "值应在1-5范围内，实际为6",
+		},
+		{
+			name:       "range非数字",
+			fieldValue: "abc",
+			rule:       "1-5",
+			want:       false,
+			wantMsg:    "字段值不是有效数字",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &RuleValidator{
+				FieldValue: tt.fieldValue,
+			}
+
+			got, gotMsg := rv.ValidateRule(tt.rule)
+
+			if got != tt.want {
+				t.Errorf("ValidateRule(%s) got = %v, want %v", tt.rule, got, tt.want)
+			}
+
+			if gotMsg != tt.wantMsg {
+				t.Errorf("ValidateRule(%s) gotMsg = %v, want %v", tt.rule, gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// 测试正则表达式验证规则
+func TestValidateRegexRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		fieldValue string
+		rule       string
+		want       bool
+		wantMsg    string
+	}{
+		// reg规则
+		{
+			name:       "reg匹配",
+			fieldValue: "hello123",
+			rule:       "reg=[a-z0-9]+",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "reg不匹配",
+			fieldValue: "HELLO",
+			rule:       "reg=[a-z0-9]+",
+			want:       false,
+			wantMsg:    "字段值不符合正则表达式规则",
+		},
+		{
+			name:       "reg空值",
+			fieldValue: "",
+			rule:       "reg=[a-z0-9]+",
+			want:       false,
+			wantMsg:    "字段值不符合正则表达式规则",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &RuleValidator{
+				FieldValue: tt.fieldValue,
+			}
+
+			got, gotMsg := rv.ValidateRule(tt.rule)
+
+			if got != tt.want {
+				t.Errorf("ValidateRule(%s) got = %v, want %v", tt.rule, got, tt.want)
+			}
+
+			if gotMsg != tt.wantMsg {
+				t.Errorf("ValidateRule(%s) gotMsg = %v, want %v", tt.rule, gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// 测试条件验证规则
+func TestValidateConditionRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		fieldValue string
+		allFields  []string
+		rule       string
+		want       bool
+		wantMsg    string
+	}{
+		// if条件规则
+		{
+			name:       "if条件匹配",
+			fieldValue: "8",
+			allFields:  []string{"", "", "", "", "", "", "", "", "", "", "", "", "5"},
+			rule:       "if($13==5,8)",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "if条件不匹配",
+			fieldValue: "8",
+			allFields:  []string{"", "", "", "", "", "", "", "", "", "", "", "", "10"},
+			rule:       "if($13==5,8)",
+			want:       true,
+			wantMsg:    "",
+		},
+		{
+			name:       "if条件字段值不匹配",
+			fieldValue: "10",
+			allFields:  []string{"", "", "", "", "", "", "", "", "", "", "", "", "5"},
+			rule:       "if($13==5,8)",
+			want:       true,
+			wantMsg:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &RuleValidator{
+				FieldValue: tt.fieldValue,
+				AllFields:  tt.allFields,
+				FieldNumberMap: map[string]int{
+					"13": 12, // $13对应索引12
+				},
+			}
+
+			got, gotMsg := rv.ValidateCondition(tt.rule)
+
+			if got != tt.want {
+				t.Errorf("ValidateCondition(%s) got = %v, want %v", tt.rule, got, tt.want)
+			}
+
+			if gotMsg != tt.wantMsg {
+				t.Errorf("ValidateCondition(%s) gotMsg = %v, want %v", tt.rule, gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// 测试枚举验证规则（原有的测试用例）
 func TestValidateEnum(t *testing.T) {
 	tests := []struct {
 		name       string
