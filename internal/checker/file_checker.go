@@ -24,28 +24,16 @@ func FileCheck(fileName, filePath string, fileTypeFlag FileTypeFlag, sheetName s
 		return "good"
 	}
 
-	// 检查文件名前缀（支持多种匹配方式）
+	// 检查文件名前缀（只使用严格前缀匹配）
 	validPrefix := false
-	for _, header := range config.Headers {
-		// 方式1：严格前缀匹配
-		if strings.HasPrefix(fileName, header) {
+	if len(config.Headers) > 0 {
+		//for _, header := range config.Headers {
+		// 严格前缀匹配
+		if strings.HasPrefix(fileName, config.Headers[0]) {
 			validPrefix = true
-			break
+			//break
 		}
-
-		// 方式2：包含匹配（处理文件名中包含更多信息的情况）
-		if strings.Contains(fileName, header) {
-			validPrefix = true
-			break
-		}
-
-		// 方式3：标准化匹配（去除特殊字符后比较）
-		normalizedFileName := strings.ReplaceAll(fileName, "+", "")
-		normalizedHeader := strings.ReplaceAll(header, "+", "")
-		if strings.Contains(normalizedFileName, normalizedHeader) {
-			validPrefix = true
-			break
-		}
+		//break
 	}
 
 	if !validPrefix {
@@ -113,29 +101,16 @@ func TraverseDirectory(path string, fileTypeFlag FileTypeFlag, sheetName string,
 		result := FileCheck(fileName, filePath, fileTypeFlag, sheetName)
 
 		if result == "good" && config.CheckContent == "校验" {
-			// 检查文件头匹配（支持多种匹配方式）
+			// 检查文件头匹配（只使用严格前缀匹配）
 			if len(config.Headers) > 0 {
-				for _, header := range config.Headers {
-					// 方式1：严格前缀匹配
-					if strings.HasPrefix(fileName, header) {
-						filenames = append(filenames, filePath)
-						break
-					}
-
-					// 方式2：包含匹配（处理文件名中包含更多信息的情况）
-					if strings.Contains(fileName, header) {
-						filenames = append(filenames, filePath)
-						break
-					}
-
-					// 方式3：标准化匹配（去除特殊字符后比较）
-					normalizedFileName := strings.ReplaceAll(fileName, "+", "")
-					normalizedHeader := strings.ReplaceAll(header, "+", "")
-					if strings.Contains(normalizedFileName, normalizedHeader) {
-						filenames = append(filenames, filePath)
-						break
-					}
+				//for _, header := range config.Headers {
+				// 严格前缀匹配
+				if strings.HasPrefix(fileName, config.Headers[0]) {
+					filenames = append(filenames, filePath)
+					//break
 				}
+				//break
+				//}
 			}
 		}
 

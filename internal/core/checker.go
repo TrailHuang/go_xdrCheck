@@ -289,7 +289,10 @@ func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig pa
 
 	if foundFileConfig {
 		// 使用Excel模板中的配置
-		config.Headers = []string{fileValidationConfig.FileHeader}
+		// FileHeader需要按分号分割后转成[]string
+		if fileValidationConfig.FileHeader != "" {
+			config.Headers = strings.Split(fileValidationConfig.FileHeader, ";")
+		}
 		config.Suffix = fileValidationConfig.FileSuffix
 		config.SizeLimit = fileValidationConfig.FileSize
 		config.CheckContent = fileValidationConfig.CheckContent
