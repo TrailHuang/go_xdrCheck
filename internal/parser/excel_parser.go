@@ -25,6 +25,8 @@ type FileValidationConfig struct {
 	FileSuffix   string // 文件后缀
 	FileSize     string // 文件大小
 	CheckContent string // 文件内容检查
+	HeaderCheck  string // 首行校验（来源于sheet名称）
+	FieldCount   string // 字段个数（来源于sheet名称）
 }
 
 type SheetConfig struct {
@@ -109,6 +111,8 @@ func parseFileValidationSheet(xlsx *excelize.File) []SheetConfig {
 				FileSuffix:   strings.TrimSpace(row[2]), // 文件后缀
 				FileSize:     strings.TrimSpace(row[3]), // 文件大小
 				CheckContent: strings.TrimSpace(row[4]), // 文件内容
+				HeaderCheck:  strings.TrimSpace(row[5]), // 首行校验（第6列）
+				FieldCount:   strings.TrimSpace(row[6]), // 字段个数（第7列）
 			},
 		}
 

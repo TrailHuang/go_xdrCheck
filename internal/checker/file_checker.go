@@ -12,6 +12,8 @@ type FileTypeConfig struct {
 	Suffix       string
 	SizeLimit    string
 	CheckContent string
+	HeaderCheck  string // 首行校验（来源于sheet名称）
+	FieldCount   string // 字段个数（来源于sheet名称）
 }
 
 type FileTypeFlag map[string]FileTypeConfig

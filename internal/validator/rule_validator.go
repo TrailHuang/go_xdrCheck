@@ -540,7 +540,7 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 	expectedValues := strings.TrimSpace(parts[1])
 
 	// 解析字段引用（如 $13）
-	fieldIndex, fieldNumberStr, err := rv.parseFieldReference(fieldRef)
+	fieldIndex, _, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
@@ -562,16 +562,19 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 		}
 
 		if actualValue == expected {
-			// 条件满足，当前字段必须有值
+			// 条件满足，检查当前字段是否为空
 			if rv.FieldValue == "" {
-				return false, fmt.Sprintf("当字段%s等于%s时，此字段不能为空", fieldNumberStr, expected)
+				// 字段为空，根据业务逻辑决定是否报错
+				// 这里应该由调用方根据字段的"选填/必填"属性来决定
+				// 条件验证只负责验证条件是否满足，不处理字段空值逻辑
+				return true, ""
 			}
 			return true, ""
 		}
 	}
 
 	// 条件不满足，不需要校验
-	return true, ""
+	return false, "条件不满足"
 }
 
 // validateNotEqualCondition 验证不等于条件

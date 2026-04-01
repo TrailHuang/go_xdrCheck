@@ -2,30 +2,27 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"time"
 
 	"xdrCheck/internal/config"
 	"xdrCheck/internal/core"
 
-	_ "net/http/pprof"
-
 	"github.com/spf13/pflag"
 )
 
 var (
-	version   = "2025_v1.1.18"
-	buildTime = "unknown"
-	svnNo     = "unknown"
-	timeParam string
-	scanNum   int
-	checkNow  bool
-	noSubPath bool
-	workerNum int
-	format    string
+	version    = "2025_v1.1.18"
+	buildTime  = "unknown"
+	svnNo      = "unknown"
+	timeParam  string
+	scanNum    int
+	checkNow   bool
+	noSubPath  bool
+	workerNum  int
+	format     string
+	configFile string
 )
 
 func main() {
@@ -38,6 +35,7 @@ func main() {
 	pflag.StringVarP(&format, "format", "f", "txt", "report format: txt, table, html (default: txt)")
 	pflag.BoolP("help", "h", false, "help info")
 	pflag.BoolP("version", "v", false, "version info")
+	pflag.StringVarP(&configFile, "config", "c", "", "config file path")
 
 	pflag.Parse()
 
@@ -76,32 +74,8 @@ func main() {
 	// 清理旧的临时目录
 	core.ClearOldTmpDirs("/tmp/xdr_check", 30)
 
-	go func() {
-		http.ListenAndServe("127.0.0.1:8899", nil)
-	}()
-
-	// 性能分析: CPU profile
-	cpuProfile, err := os.Create("cpu_profile.prof")
-	if err != nil {
-		fmt.Printf("创建CPU profile文件失败: %v\n", err)
-		return
-	}
-	pprof.StartCPUProfile(cpuProfile)
-	defer pprof.StopCPUProfile()
-
-	// 性能分析: 内存 profile
-	defer func() {
-		memProfile, err := os.Create("mem_profile.prof")
-		if err != nil {
-			fmt.Printf("创建内存profile文件失败: %v\n", err)
-			return
-		}
-		pprof.WriteHeapProfile(memProfile)
-		memProfile.Close()
-	}()
-
 	// 启动主程序
-	if err := startCheck(); err != nil {
+	if err := startCheck(configFile); err != nil {
 		fmt.Printf("检查失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -117,6 +91,7 @@ func printHelp() {
 	fmt.Println("-p,\t--nosubpath\t\tdo not check sub path")
 	fmt.Println("-r,\t--routines\t\tnumber of worker routines (default: 4)")
 	fmt.Println("-f,\t--format\t\treport format: txt, table, html (default: txt)")
+	fmt.Println("-c,\t--config\t\tconfig file path")
 	fmt.Println("========================================================")
 }
 
@@ -126,12 +101,14 @@ func printVersion() {
 	fmt.Printf("svn版本: %s\n", svnNo)
 }
 
-func startCheck() error {
+func startCheck(configFile string) error {
 	// 加载配置文件
-	configFile := config.GetConfigFile()
+	if configFile == "" {
+		configFile = config.GetConfigFile()
+	}
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		return fmt.Errorf("加载配置文件失败: %v", err)
+		return fmt.Errorf("加载配置文件%s 失败: %v", configFile, err)
 	}
 
 	// 创建检查器配置

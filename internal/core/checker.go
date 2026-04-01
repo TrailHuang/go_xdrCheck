@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -282,6 +283,8 @@ func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig pa
 		Suffix:       ".txt", // 默认后缀
 		SizeLimit:    "不校验",
 		CheckContent: "校验",
+		HeaderCheck:  "不校验",
+		FieldCount:   "不校验",
 	}
 
 	if foundFileConfig {
@@ -290,6 +293,8 @@ func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig pa
 		config.Suffix = fileValidationConfig.FileSuffix
 		config.SizeLimit = fileValidationConfig.FileSize
 		config.CheckContent = fileValidationConfig.CheckContent
+		config.HeaderCheck = fileValidationConfig.HeaderCheck // 首行校验
+		config.FieldCount = fileValidationConfig.FieldCount   // 字段个数
 	}
 
 	fileTypeFlag[pathName] = config
@@ -343,6 +348,16 @@ func (x *XDRChecker) processTasksWithWorkerPool(tasks []CheckTask, workerNum int
 	return nil
 }
 
+// decodeBase64 解码base64编码的字符串
+func decodeBase64(encoded string) (string, error) {
+	// 导入base64包
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("base64解码失败: %v", err)
+	}
+	return string(decoded), nil
+}
+
 // worker 协程处理函数
 func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<- CheckResult, wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -376,8 +391,8 @@ func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<-
 		errors, lineCount, duration := x.checkSingleFileContent(task.Filename, task.SheetConfig)
 
 		// 显示文件检查统计信息
-		x.writeResult(fmt.Sprintf("[Worker %d] 文件%s: 检查%d行, 耗时%s, 发现%d个错误",
-			id, task.Filename, lineCount, duration, len(errors)))
+		//x.writeResult(fmt.Sprintf("[Worker %d] 文件%s: 检查%d行, 耗时%s, 发现%d个错误",
+		//	id, task.Filename, lineCount, duration, len(errors)))
 
 		// 发送处理结果到文件写入协程
 		result := CheckResult{
@@ -472,8 +487,8 @@ func (x *XDRChecker) fileWriter(resultChan <-chan CheckResult, wg *sync.WaitGrou
 			// 写入错误信息
 			writer := writers[resultFile]
 			x.writeFormattedErrors(writer, result.Task.Filename, result.Errors)
-			x.writeResult(fmt.Sprintf("写入错误信息到文件: %s (源文件: %s, 错误数: %d)",
-				resultFile, result.Task.Filename, len(result.Errors)))
+			//x.writeResult(fmt.Sprintf("写入错误信息到文件: %s (源文件: %s, 错误数: %d)",
+			//	resultFile, result.Task.Filename, len(result.Errors)))
 		}
 	}
 
@@ -1149,6 +1164,11 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 		lineNum++
 
+		// 首行校验逻辑：如果配置为"不校验"，则跳过第一行的字段校验
+		if lineNum == 1 && sheetConfig.FileValidation.HeaderCheck == "不校验" {
+			continue
+		}
+
 		// 解析字段
 		fields := strings.Split(line, x.Config.ColDelimiter)
 
@@ -1166,14 +1186,13 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			}
 
 			// 校验字段
-			validator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
+			fieldValidator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
 
 			// 首先校验条件（如果有）
+			conditionSatisfied := false // 默认条件不满足
 			if fieldRule.Condition != "" {
-				// 对于选填字段且为空的情况，需要特殊处理
-				if fieldRule.Required == "选填" && fieldValue == "" {
-					// 选填字段为空时，必须验证条件
-					valid, msg := validator.ValidateCondition(fieldRule.Condition)
+				valid, _ := fieldValidator.ValidateCondition(fieldRule.Condition)
+				/*
 					if !valid {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
@@ -1187,32 +1206,29 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 							FullLine:   line,
 						})
 					}
+				*/
+				conditionSatisfied = valid
+			}
+
+			// 根据条件结果确定字段的实际必填状态
+			actualRequired := fieldRule.Required
+			if fieldRule.Condition != "" {
+				if conditionSatisfied {
+					// 条件满足：选填字段变为必填
+					actualRequired = "必填"
 				} else {
-					// 其他情况（必填字段或选填字段有值）
-					valid, msg := validator.ValidateCondition(fieldRule.Condition)
-					if !valid {
-						errors = append(errors, ValidationError{
-							Filename:   filename,
-							LineNum:    lineNum,
-							FieldIndex: i + 1,
-							FieldName:  fieldRule.FieldName,
-							ErrorType:  "condition",
-							RuleOrType: fieldRule.Condition,
-							Message:    msg,
-							FieldValue: fieldValue,
-							FullLine:   line,
-						})
-					}
+					// 条件不满足：保持选填
+					actualRequired = "选填"
 				}
 			}
 
 			// 然后校验类型
 			if fieldRule.Type != "" {
 				// 对于选填字段且为空的情况，跳过类型校验
-				if fieldRule.Required == "选填" && fieldValue == "" && fieldRule.Condition == "" {
-					// 选填字段为空且无条件规则时，跳过类型校验
+				if actualRequired == "选填" && fieldValue == "" {
+					// 选填字段为空时，跳过类型校验
 				} else {
-					valid, msg := validator.ValidateType(fieldRule.Type)
+					valid, msg := fieldValidator.ValidateType(fieldRule.Type)
 					if !valid {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
@@ -1232,10 +1248,33 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			// 然后校验其他规则
 			for _, rule := range fieldRule.Rules {
 				// 对于选填字段且为空的情况，跳过规则校验
-				if fieldRule.Required == "选填" && fieldValue == "" && fieldRule.Condition == "" {
-					// 选填字段为空且无条件规则时，跳过规则校验
+				if (actualRequired == "选填" && fieldValue == "") || (fieldRule.Required == "选填" && !conditionSatisfied) {
+					// 选填字段为空时，跳过规则校验
 				} else {
-					valid, msg := validator.ValidateRule(rule)
+					// 如果字段类型是base64，先进行base64解码
+					ruleValue := fieldValue
+					if fieldRule.Type == "base64" {
+						decoded, err := decodeBase64(fieldValue)
+						if err != nil {
+							errors = append(errors, ValidationError{
+								Filename:   filename,
+								LineNum:    lineNum,
+								FieldIndex: i + 1,
+								FieldName:  fieldRule.FieldName,
+								ErrorType:  "rule",
+								RuleOrType: rule,
+								Message:    fmt.Sprintf("base64解码失败: %v", err),
+								FieldValue: fieldValue,
+								FullLine:   line,
+							})
+							continue
+						}
+						ruleValue = decoded
+					}
+
+					// 使用解码后的值进行规则校验
+					ruleValidator := validator.NewRuleValidator(ruleValue, i, fields, sheetConfig.FieldNumberMap)
+					valid, msg := ruleValidator.ValidateRule(rule)
 					if !valid {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
@@ -1245,7 +1284,7 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 							ErrorType:  "rule",
 							RuleOrType: rule,
 							Message:    msg,
-							FieldValue: fieldValue,
+							FieldValue: ruleValue,
 							FullLine:   line,
 						})
 					}
@@ -1265,7 +1304,7 @@ func (x *XDRChecker) openFile(filename string) (io.ReadCloser, error) {
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	switch ext {
-	case ".gz", ".tar.gz":
+	case ".gz", ".tar.gz", ".tar":
 		return x.openCompressedFile(filename)
 	case ".txt", ".log":
 		return os.Open(filename)
@@ -1320,6 +1359,33 @@ func (x *XDRChecker) openCompressedFile(filename string) (io.ReadCloser, error) 
 		}
 
 		gzReader.Close()
+		file.Close()
+		return nil, fmt.Errorf("tar文件中未找到普通文件")
+	} else if ext == ".tar" {
+		// 处理.tar文件
+		tarReader := tar.NewReader(file)
+
+		// 读取tar文件头，找到第一个普通文件
+		for {
+			header, err := tarReader.Next()
+			if err == io.EOF {
+				break // tar文件结束
+			}
+			if err != nil {
+				file.Close()
+				return nil, fmt.Errorf("读取tar文件头失败: %v", err)
+			}
+
+			// 如果是普通文件，返回其内容
+			if header.Typeflag == tar.TypeReg {
+				// 创建组合的读取器，关闭时同时关闭文件资源
+				return &combinedReader{
+					Reader:  tarReader,
+					closers: []io.Closer{file},
+				}, nil
+			}
+		}
+
 		file.Close()
 		return nil, fmt.Errorf("tar文件中未找到普通文件")
 	} else if ext == ".gz" {
