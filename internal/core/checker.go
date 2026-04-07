@@ -365,21 +365,25 @@ func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<-
 	for task := range taskChan {
 		// 特殊路径处理
 		if task.IsSpecial {
-			x.writeResult(fmt.Sprintf("[Worker %d] 特殊路径%s: 执行特殊处理", id, task.PathName))
-
+			success := false
+			startTime := time.Now()
 			// 执行特殊路径处理
 			// 注意：特殊路径处理需要正确的路径，这里使用PathName作为路径标识
-			if err := x.handleSpecialPath(task.PathName, task.PathName, []string{task.Filename}); err != nil {
+			errors, lineCount, err := x.handleSpecialPath(task.PathName, task.Filename, task.SheetConfig)
+			if err != nil {
 				x.writeResult(fmt.Sprintf("[Worker %d] 特殊路径%s处理失败: %v", id, task.PathName, err))
+				success = false
+			} else {
+				success = true
 			}
 
 			// 特殊路径不进行文件检查，直接返回成功结果
 			result := CheckResult{
 				Task:      task,
-				Errors:    []ValidationError{},
-				LineCount: 0,
-				Duration:  0,
-				Success:   true,
+				Errors:    errors,
+				LineCount: lineCount,
+				Duration:  time.Since(startTime),
+				Success:   success,
 				ErrorMsg:  fmt.Sprintf("特殊路径%s处理完成", task.PathName),
 			}
 			resultChan <- result
@@ -609,40 +613,29 @@ func (x *XDRChecker) isSpecialPath(pathName string) bool {
 	return false
 }
 
-func (x *XDRChecker) handleSpecialPath(pathName, path string, filenames []string) error {
+func (x *XDRChecker) handleSpecialPath(pathName string, filename string, sheetConfig parser.SheetConfig) ([]ValidationError, int, error) {
 	// 特殊路径处理逻辑
+	var errors []ValidationError
+
 	if pathName == "local_to_cu_0x01e0" {
-		return x.handleLocalToCU(pathName, path, filenames)
+		lineCount, err := x.handleLocalToCU(filename, sheetConfig, &errors)
+		if err != nil {
+			return errors, lineCount, err
+		}
+		return errors, lineCount, nil
 	}
 
-	return nil
+	return errors, 0, nil
 }
 
-func (x *XDRChecker) handleLocalToCU(pathName, path string, filenames []string) error {
-	// 获取当前时间戳
-	now := time.Now()
-	startTime := now.Add(-24 * time.Hour).Format("20060102150405")
-	endTime := now.Format("20060102150405")
-
-	// 构建命令参数
-	cmdArgs := []string{
-		"v1_2",
-		path,
-		startTime,
-		endTime,
-		"0", "0", "0", // 默认参数
+func (x *XDRChecker) handleLocalToCU(filename string, sheetConfig parser.SheetConfig, errors *[]ValidationError) (int, error) {
+	// 使用KLV接口解析文件，而不是调用外部工具
+	br, err := ProcessDatFile(filename, sheetConfig, errors)
+	if err != nil {
+		return 0, fmt.Errorf("处理文件失败: %w", err)
 	}
 
-	// 执行外部命令
-	x.writeResult(fmt.Sprintf("execute: ./parse_01e0 %s", strings.Join(cmdArgs, " ")))
-
-	// 模拟抽样检查显示
-	fmt.Printf("抽样检查parse: 1/1个文件\n")
-
-	// 生成校验结果摘要
-	x.generateResultSummary(pathName, "parse", 1, []string{})
-
-	return nil
+	return len(br.Lines), nil
 }
 
 func (x *XDRChecker) createResultDirectory() string {
@@ -773,21 +766,6 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			conditionSatisfied := false // 默认条件不满足
 			if fieldRule.Condition != "" {
 				valid, _ := fieldValidator.ValidateCondition(fieldRule.Condition)
-				/*
-					if !valid {
-						errors = append(errors, ValidationError{
-							Filename:   filename,
-							LineNum:    lineNum,
-							FieldIndex: i + 1,
-							FieldName:  fieldRule.FieldName,
-							ErrorType:  "condition",
-							RuleOrType: fieldRule.Condition,
-							Message:    msg,
-							FieldValue: fieldValue,
-							FullLine:   line,
-						})
-					}
-				*/
 				conditionSatisfied = valid
 			}
 
