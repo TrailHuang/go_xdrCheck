@@ -1,11 +1,15 @@
 module xdrCheck
 
-go 1.23
+go 1.24.0
+
+toolchain go1.24.9
 
 require (
 	github.com/360EntSecGroup-Skylar/excelize v1.4.1
 	github.com/go-ini/ini v1.67.0
-	github.com/spf13/pflag v1.0.5
+	github.com/jinzhu/copier v0.4.0
+	github.com/olekukonko/tablewriter v1.1.4
+	github.com/spf13/pflag v1.0.10
 )
 
 require (
@@ -20,6 +24,5 @@ require (
 	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
 	github.com/olekukonko/errors v1.2.0 // indirect
 	github.com/olekukonko/ll v0.1.6 // indirect
-	github.com/olekukonko/tablewriter v1.1.4 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 )
