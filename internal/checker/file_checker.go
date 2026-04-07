@@ -128,16 +128,26 @@ func TraverseDirectory(path string, fileTypeFlag FileTypeFlag, sheetName string,
 	if scanNum > 0 {
 		if scanNum < scan_count {
 			filenames = sampleFiles(filenames, scanNum)
-			// 显示抽样检查信息
-			fmt.Printf("抽样检查 %s %s: %d/%d个文件\n", sheetName, path, scanNum, scan_count)
+			// 显示抽样检查信息（显示实际处理的文件数）
+			fmt.Printf("抽样检查 %s %s: %d/%d个文件 总文件数:%d\n", sheetName, path, len(filenames), scan_count, count)
 		} else {
-			fmt.Printf("全量检查 %s %s: %d个文件\n", sheetName, path, scan_count)
+			fmt.Printf("全量检查 %s %s: %d个文件 总文件数:%d\n", sheetName, path, scan_count, count)
 		}
+	} else {
+		// 全量检查时也显示信息
+		fmt.Printf("全量检查 %s %s: %d个文件 总文件数:%d\n", sheetName, path, scan_count, count)
 	}
 
+	// 统一统计逻辑：count表示实际需要处理的文件数
+	// 日志打印的是scan_count（通过文件头匹配的文件数）
+	// 但最终统计应该使用实际处理的文件数
 	if config.CheckContent == "校验" {
-		// 当需要校验内容时，count应该表示需要校验的文件数
+		// 当需要校验内容时，只处理通过文件头匹配的文件
 		count = len(filenames)
+	} else {
+		// 当不需要校验内容时，处理所有文件
+		// count已经通过count++统计了所有文件
+		// 不需要修改count
 	}
 
 	return filenames, count, nil

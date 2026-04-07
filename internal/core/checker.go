@@ -185,7 +185,7 @@ func (x *XDRChecker) StartCheck() error {
 		}
 
 		// 扫描该路径下的所有文件
-		filenames, count, err := x.scanFilesForPath(checkPath, pathName, sheetConfig)
+		filenames, _, err := x.scanFilesForPath(checkPath, pathName, sheetConfig)
 		if err != nil {
 			x.writeResult(fmt.Sprintf("扫描路径%s失败: %v", pathName, err))
 			continue
@@ -202,7 +202,8 @@ func (x *XDRChecker) StartCheck() error {
 				IsSpecial:   isSpecial,
 			})
 		}
-		totalFiles += count
+		// 使用实际创建的任务数进行统计，确保与最终处理的任务数一致
+		totalFiles += len(filenames)
 	}
 
 	x.writeResult(fmt.Sprintf("扫描完成，共发现%d个文件，准备使用%d个协程进行处理", totalFiles, x.WorkerNum))
@@ -300,12 +301,12 @@ func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig pa
 	fileTypeFlag[pathName] = config
 
 	// 遍历目录并获取文件列表
-	filenames, count, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
+	filenames, _, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
 	if err != nil {
 		return nil, 0, fmt.Errorf("目录遍历错误: %v", err)
 	}
 
-	return filenames, count, nil
+	return filenames, len(filenames), nil
 }
 
 // processTasksWithWorkerPool 使用协程池处理任务，单协程写入文件
