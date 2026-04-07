@@ -3,7 +3,7 @@
 # XDR检查工具构建脚本
 # 同时编译Linux x86_64和ARM64版本并打包
 
-PKT_VER="xdr_check"
+PKT_VER="go_xdr_check"
 PLATFORM="linux"
 ARCH="x86_64"
 release_dir="xdr_check_tools"
