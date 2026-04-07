@@ -123,14 +123,15 @@ func TraverseDirectory(path string, fileTypeFlag FileTypeFlag, sheetName string,
 		return filenames, count, nil
 	}
 
+	scan_count := len(filenames)
 	// 抽样检查
 	if scanNum > 0 {
-		if scanNum < len(filenames) {
+		if scanNum < scan_count {
 			filenames = sampleFiles(filenames, scanNum)
 			// 显示抽样检查信息
-			fmt.Printf("抽样检查%s: %d/%d个文件\n", path, scanNum, len(filenames))
+			fmt.Printf("抽样检查 %s %s: %d/%d个文件\n", sheetName, path, scanNum, scan_count)
 		} else {
-			fmt.Printf("全量检查%s: %d个文件\n", path, len(filenames))
+			fmt.Printf("全量检查 %s %s: %d个文件\n", sheetName, path, scan_count)
 		}
 	}
 
