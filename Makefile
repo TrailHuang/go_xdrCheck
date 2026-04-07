@@ -23,14 +23,14 @@ all: build-linux build-linux-arm64
 build-linux:
 	@echo "Building $(PROJECT_NAME) for linux/amd64..."
 	@mkdir -p $(BIN_DIR)/linux/amd64
-	GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/linux/amd64/$(PROJECT_NAME) ./cmd/xdrcheck
+	GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -buildvcs=false -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/linux/amd64/$(PROJECT_NAME) ./cmd/xdrcheck
 	@echo "Build completed: $(BIN_DIR)/linux/amd64/$(PROJECT_NAME)"
 
 # 构建Linux ARM64版本
 build-linux-arm64:
 	@echo "Building $(PROJECT_NAME) for linux/arm64..."
 	@mkdir -p $(BIN_DIR)/linux/arm64
-	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/linux/arm64/$(PROJECT_NAME) ./cmd/xdrcheck
+	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -buildvcs=false -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/linux/arm64/$(PROJECT_NAME) ./cmd/xdrcheck
 	@echo "Build completed: $(BIN_DIR)/linux/arm64/$(PROJECT_NAME)"
 
 # 构建当前平台版本（用于开发）
