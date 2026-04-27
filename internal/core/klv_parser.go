@@ -586,6 +586,11 @@ func (p *KLVParser) convertToInt(data interface{}) int {
 		return int(v)
 	case uint32:
 		return int(v)
+	case string:
+		if val, err := strconv.Atoi(v); err == nil {
+			return val
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -719,8 +724,8 @@ func validateFieldRules(field FieldDef, data string, errors *[]ValidationError) 
 					FieldValue: ruleValue,
 					FullLine:   "",
 				})
+				return fmt.Errorf("规则校验失败")
 			}
-			return fmt.Errorf("规则校验失败")
 		}
 	}
 

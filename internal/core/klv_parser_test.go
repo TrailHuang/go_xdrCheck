@@ -407,11 +407,16 @@ func TestConvertFieldValue(t *testing.T) {
 		data      []byte
 		expected  string
 	}{
+		{"bool", "bool", []byte{0x01}, "1"},
+		{"int", "int", []byte{0x05}, "5"},
 		{"uint8", "uint8", []byte{0x05}, "5"},
 		{"uint16", "uint16", []byte{0x01, 0x00}, "256"},
+		{"uint32", "uint32", []byte{0x00, 0x01, 0x00, 0x00}, "65536"},
 		{"string", "string", []byte("hello"), "hello"},
 		{"ip", "ip", []byte{192, 168, 1, 1}, "192.168.1.1"},
+		{"base64", "base64", []byte("test"), "test"},
 		{"cmd", "cmd", []byte("CMD001"), "CMD001"},
+		{"default", "unknown", []byte("test"), "test"},
 	}
 
 	p := &KLVParser{}
@@ -828,4 +833,576 @@ func buildValidDatFile() []byte {
 	binary.Write(&buf, binary.BigEndian, uint16(1))
 
 	return buf.Bytes()
+}
+
+// ============== parseRepeatedField 分支测试 ==============
+
+func TestParseRepeatedField_MissingRepeatCount(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:          "TestField",
+		RepeatedField: "MissingCount",
+	}
+	var errors []ValidationError
+
+	err := p.parseRepeatedField(reader, field, &errors)
+	if err == nil {
+		t.Error("缺少重复计数字段时应报错")
+	}
+}
+
+func TestParseRepeatedField_InvalidRepeatCount(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{
+			"CountField": "-1",
+		},
+		fields: &BinaryLogFields{Fields: []BField{}},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:          "TestField",
+		Length:        1,
+		RepeatedField: "CountField",
+	}
+	var errors []ValidationError
+
+	err := p.parseRepeatedField(reader, field, &errors)
+	if err == nil {
+		t.Error("负数重复计数时应报错")
+	}
+}
+
+func TestParseRepeatedField_ValidRepeat(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{
+			"CountField": "2",
+		},
+		fields: &BinaryLogFields{Fields: []BField{}},
+	}
+	reader := NewByteReader([]byte{0xAA, 0xBB})
+	field := FieldDef{
+		Name:          "TestField",
+		Length:        1,
+		RepeatedField: "CountField",
+		ValueType:     "uint8",
+	}
+	var errors []ValidationError
+
+	err := p.parseRepeatedField(reader, field, &errors)
+	if err != nil {
+		t.Fatalf("有效重复应成功: %v", err)
+	}
+	if reader.Remaining() != 0 {
+		t.Errorf("应读完所有数据, 剩余 %d", reader.Remaining())
+	}
+}
+
+// ============== parseFixedField 分支测试 ==============
+
+func TestParseFixedField_InvalidLength(t *testing.T) {
+	p := &KLVParser{}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:   "TestField",
+		Length: -1,
+	}
+	var errors []ValidationError
+
+	err := p.parseFixedField(reader, field, &errors)
+	if err == nil {
+		t.Error("无效长度时应报错")
+	}
+}
+
+func TestParseFixedField_ReadError(t *testing.T) {
+	p := &KLVParser{}
+	reader := NewByteReader([]byte{0x01})
+	field := FieldDef{
+		Name:   "TestField",
+		Length: 5,
+	}
+	var errors []ValidationError
+
+	err := p.parseFixedField(reader, field, &errors)
+	if err == nil {
+		t.Error("读取不足时应报错")
+	}
+}
+
+// ============== parseLengthPrefixedField 分支测试 ==============
+
+func TestParseLengthPrefixedField_MissingLengthField(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:     "TestField",
+		LenField: "MissingLen",
+	}
+	var errors []ValidationError
+
+	err := p.parseLengthPrefixedField(reader, field, &errors)
+	if err == nil {
+		t.Error("缺少长度字段时应报错")
+	}
+}
+
+func TestParseLengthPrefixedField_InvalidLengthValue(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{
+			"LenField": "not_a_number",
+		},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:     "TestField",
+		LenField: "LenField",
+	}
+	var errors []ValidationError
+
+	err := p.parseLengthPrefixedField(reader, field, &errors)
+	if err == nil {
+		t.Error("无效长度值时应报错")
+	}
+}
+
+func TestParseLengthPrefixedField_ReadError(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{
+			"LenField": string([]byte{0x05}),
+		},
+		fields: &BinaryLogFields{Fields: []BField{}},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02})
+	field := FieldDef{
+		Name:      "TestField",
+		LenField:  "LenField",
+		ValueType: "string",
+	}
+	var errors []ValidationError
+
+	err := p.parseLengthPrefixedField(reader, field, &errors)
+	if err == nil {
+		t.Error("读取不足时应报错")
+	}
+}
+
+// ============== parseField 分支测试 ==============
+
+func TestParseField_FixedLength(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: make(map[string]string),
+		fields:   &BinaryLogFields{Fields: []BField{}},
+	}
+	reader := NewByteReader([]byte{0x01, 0x02, 0x03})
+	field := FieldDef{
+		Name:      "TestField",
+		Length:    3,
+		ValueType: "uint8",
+	}
+	var errors []ValidationError
+
+	err := p.parseField(reader, field, &errors)
+	if err != nil {
+		t.Fatalf("固定长度字段解析应成功: %v", err)
+	}
+	if reader.Remaining() != 0 {
+		t.Error("应读完所有数据")
+	}
+}
+
+func TestParseField_LengthPrefixed(t *testing.T) {
+	p := &KLVParser{
+		fieldMap: map[string]string{
+			"LenField": "2",
+		},
+		fields: &BinaryLogFields{Fields: []BField{}},
+	}
+	reader := NewByteReader([]byte{0xAA, 0xBB})
+	field := FieldDef{
+		Name:      "TestField",
+		Length:    0,
+		LenField:  "LenField",
+		ValueType: "uint8",
+	}
+	var errors []ValidationError
+
+	err := p.parseField(reader, field, &errors)
+	if err != nil {
+		t.Fatalf("前导长度字段解析应成功: %v", err)
+	}
+	if reader.Remaining() != 0 {
+		t.Error("应读完所有数据")
+	}
+}
+
+// ============== Parse 分支测试 ==============
+
+func TestParse_ConditionalFieldIncluded(t *testing.T) {
+	data := make([]byte, 100)
+	// 填充前缀头
+	copy(data[0:16], make([]byte, 16))
+	// CommandID (13 字节)
+	copy(data[16:29], []byte("CMD0012345678"))
+	// House_ID_Length (1 字节)
+	data[29] = 4
+	// House_ID (4 字节)
+	copy(data[30:34], []byte("H001"))
+	// SourceIP_Length (1 字节)
+	data[34] = 4
+	// SrcIp (4 字节)
+	copy(data[35:39], []byte{10, 0, 0, 1})
+	// DestinationIP_Length (1 字节)
+	data[39] = 4
+	// DestIp (4 字节)
+	copy(data[40:44], []byte{10, 0, 0, 2})
+	// SrcPort (2 字节)
+	binary.BigEndian.PutUint16(data[44:46], 12345)
+	// DestPort (2 字节)
+	binary.BigEndian.PutUint16(data[46:48], 80)
+	// DomainName_Length (2 字节)
+	binary.BigEndian.PutUint16(data[48:50], 5)
+	// DomainName (5 字节)
+	copy(data[50:55], []byte("t.com"))
+	// ProxyType_Flag (2 字节) - 值为 1 表示有代理
+	binary.BigEndian.PutUint16(data[55:57], 1)
+	// ProxyType (2 字节)
+	binary.BigEndian.PutUint16(data[57:59], 1)
+	// ProxyIp_Length (1 字节)
+	data[59] = 4
+	// ProxyIp (4 字节)
+	copy(data[60:64], []byte{192, 168, 1, 100})
+	// ProxyPort (2 字节)
+	binary.BigEndian.PutUint16(data[64:66], 8080)
+	// Title_Length (2 字节)
+	binary.BigEndian.PutUint16(data[66:68], 0)
+	// Content_Length (4 字节)
+	binary.BigEndian.PutUint32(data[68:72], 0)
+	// Url_Length (2 字节)
+	binary.BigEndian.PutUint16(data[72:74], 0)
+	// Attachmentfile_Num (1 字节)
+	data[74] = 0
+	// GatherTime (4 字节)
+	binary.BigEndian.PutUint32(data[75:79], 1609459200)
+	// TrafficType (1 字节)
+	data[79] = 1
+	// ProtocolType (1 字节)
+	data[80] = 6
+	// ApplicationProtocol (2 字节)
+	binary.BigEndian.PutUint16(data[81:83], 80)
+	// BusinessProtocol (2 字节)
+	binary.BigEndian.PutUint16(data[83:85], 1)
+
+	p := NewKLVParser(data[:85])
+	var errors []ValidationError
+
+	err := p.Parse(&errors)
+	if err != nil {
+		t.Fatalf("Parse 应成功: %v", err)
+	}
+}
+
+func TestParse_ConditionalFieldExcluded(t *testing.T) {
+	data := make([]byte, 100)
+	copy(data[0:16], make([]byte, 16))
+	copy(data[16:29], []byte("CMD0012345678"))
+	data[29] = 4
+	copy(data[30:34], []byte("H001"))
+	data[34] = 4
+	copy(data[35:39], []byte{10, 0, 0, 1})
+	data[39] = 4
+	copy(data[40:44], []byte{10, 0, 0, 2})
+	binary.BigEndian.PutUint16(data[44:46], 12345)
+	binary.BigEndian.PutUint16(data[46:48], 80)
+	binary.BigEndian.PutUint16(data[48:50], 5)
+	copy(data[50:55], []byte("t.com"))
+	// ProxyType_Flag (2 字节) - 值为 0 表示无代理
+	binary.BigEndian.PutUint16(data[55:57], 0)
+	// Title_Length (2 字节)
+	binary.BigEndian.PutUint16(data[57:59], 0)
+	// Content_Length (4 字节)
+	binary.BigEndian.PutUint32(data[59:63], 0)
+	// Url_Length (2 字节)
+	binary.BigEndian.PutUint16(data[63:65], 0)
+	// Attachmentfile_Num (1 字节)
+	data[65] = 0
+	// GatherTime (4 字节)
+	binary.BigEndian.PutUint32(data[66:70], 1609459200)
+	// TrafficType (1 字节)
+	data[70] = 1
+	// ProtocolType (1 字节)
+	data[71] = 6
+	// ApplicationProtocol (2 字节)
+	binary.BigEndian.PutUint16(data[72:74], 80)
+	// BusinessProtocol (2 字节)
+	binary.BigEndian.PutUint16(data[74:76], 1)
+
+	p := NewKLVParser(data[:76])
+	var errors []ValidationError
+
+	err := p.Parse(&errors)
+	if err != nil {
+		t.Fatalf("Parse 应成功: %v", err)
+	}
+}
+
+// ============== validateFieldRules 规则校验分支测试 ==============
+
+func TestValidateFieldRules_RuleValidation(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "string",
+			Rules:     []string{"len>=5"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "ab", &errors)
+	if err == nil {
+		t.Error("规则校验失败时应报错")
+	}
+}
+
+func TestValidateFieldRules_Base64DecodeFailure(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "base64",
+			Rules:     []string{"len>=1"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "!!!invalid-base64!!!", &errors)
+	if err == nil {
+		t.Error("base64解码失败时应报错")
+	}
+}
+
+func TestValidateFieldRules_Base64DecodeSuccess(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "base64",
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "aGVsbG8=", &errors)
+	if err != nil {
+		t.Errorf("base64解码成功且规则通过时不应报错: %v", err)
+	}
+}
+
+func TestValidateFieldRules_TypeValidationPass(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "int",
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "12345", &errors)
+	if err != nil {
+		t.Errorf("类型校验通过时不应报错: %v", err)
+	}
+}
+
+func TestValidateFieldRules_OptionalWithRules(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "选填",
+			Type:      "string",
+			Rules:     []string{"len>=3"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "hello", &errors)
+	if err != nil {
+		t.Errorf("选填字段有值且规则通过时不应报错: %v", err)
+	}
+}
+
+func TestValidateFieldRules_OptionalWithRules_Fail(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "选填",
+			Type:      "string",
+			Rules:     []string{"len>=10"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "short", &errors)
+	if err == nil {
+		t.Error("选填字段有值但规则失败时应报错")
+	}
+}
+
+func TestValidateFieldRules_OptionalEmpty_SkipRules(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "选填",
+			Type:      "string",
+			Rules:     []string{"len>=10"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "", &errors)
+	if err != nil {
+		t.Errorf("选填字段为空时应跳过规则校验: %v", err)
+	}
+	if len(errors) != 0 {
+		t.Errorf("选填字段为空时不应有错误")
+	}
+}
+
+func TestValidateFieldRules_Base64WithRules(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "base64",
+			Rules:     []string{"len>=5"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "aGVsbG8=", &errors)
+	if err != nil {
+		t.Errorf("base64解码成功且规则通过时不应报错: %v", err)
+	}
+}
+
+func TestValidateFieldRules_MultipleRules(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "string",
+			Rules:     []string{"len>=3", "len<=10"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "hello", &errors)
+	if err != nil {
+		t.Errorf("多规则都通过时不应报错: %v", err)
+	}
+}
+
+func TestValidateFieldRules_MultipleRules_FirstFail(t *testing.T) {
+	field := FieldDef{
+		Name: "TestField",
+		FieldRule: &parser.FieldRule{
+			FieldName: "TestField",
+			Required:  "必填",
+			Type:      "string",
+			Rules:     []string{"len>=10", "len<=20"},
+		},
+	}
+	var errors []ValidationError
+
+	err := validateFieldRules(field, "short", &errors)
+	if err == nil {
+		t.Error("第一个规则失败时应报错")
+	}
+}
+
+// ============== GetFilePrefixData 测试 ==============
+
+func TestBinaryFileRecord_GetFilePrefixData(t *testing.T) {
+	prefixData := []byte{0x01, 0x02, 0x03, 0x04}
+	br := BinaryFileRecord{
+		PrefixServer: FilePrefixServerInfo{
+			Prefix: prefixData,
+		},
+	}
+
+	result := br.GetFilePrefixData()
+	if len(result) != len(prefixData) {
+		t.Errorf("长度不匹配: 期望 %d, 实际 %d", len(prefixData), len(result))
+	}
+	for i := range prefixData {
+		if result[i] != prefixData[i] {
+			t.Errorf("数据不匹配: 索引 %d, 期望 %v, 实际 %v", i, prefixData[i], result[i])
+		}
+	}
+}
+
+func TestBinaryFileRecord_GetFilePrefixData_Empty(t *testing.T) {
+	br := BinaryFileRecord{
+		PrefixServer: FilePrefixServerInfo{
+			Prefix: []byte{},
+		},
+	}
+
+	result := br.GetFilePrefixData()
+	if len(result) != 0 {
+		t.Errorf("空前缀应返回空切片, 实际长度 %d", len(result))
+	}
+}
+
+func TestBinaryFileRecord_GetFilePrefixData_Nil(t *testing.T) {
+	br := BinaryFileRecord{
+		PrefixServer: FilePrefixServerInfo{
+			Prefix: nil,
+		},
+	}
+
+	result := br.GetFilePrefixData()
+	if result != nil {
+		t.Errorf("nil前缀应返回nil, 实际 %v", result)
+	}
+}
+
+// ============== Parse 错误路径测试 ==============
+
+func TestParse_InsufficientData(t *testing.T) {
+	// 数据不足以读取前缀头（需要16字节）
+	data := []byte{0x01, 0x02, 0x03}
+
+	p := NewKLVParser(data)
+	var errors []ValidationError
+
+	err := p.Parse(&errors)
+	if err == nil {
+		t.Error("数据不足时应报错")
+	}
+}
+
+func TestParse_EmptyData(t *testing.T) {
+	data := []byte{}
+
+	p := NewKLVParser(data)
+	var errors []ValidationError
+
+	err := p.Parse(&errors)
+	if err == nil {
+		t.Error("空数据时应报错")
+	}
 }

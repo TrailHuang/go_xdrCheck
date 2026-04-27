@@ -47,6 +47,49 @@ func TestCompileRegex_InvalidPattern(t *testing.T) {
 	}
 }
 
+func TestCompileRegex_EmptyPattern(t *testing.T) {
+	ClearRegexCache()
+
+	re, err := CompileRegex("")
+	if err != nil {
+		t.Fatalf("CompileRegex(\"\") 应成功: %v", err)
+	}
+
+	if re == nil {
+		t.Fatal("CompileRegex 返回 nil")
+	}
+
+	// 空正则表达式匹配任何字符串
+	if !re.MatchString("") {
+		t.Error("空正则表达式应匹配空字符串")
+	}
+
+	if !re.MatchString("abc") {
+		t.Error("空正则表达式应匹配任何字符串")
+	}
+}
+
+func TestCompileRegex_ComplexPattern(t *testing.T) {
+	ClearRegexCache()
+
+	complexPatterns := []string{
+		`^[\w.-]+@[\w.-]+\.\w+$`,
+		`^(https?|ftp)://[^\s/$.?#].[^\s]*$`,
+		`^(\+\d{1,3}[- ]?)?\d{10,11}$`,
+		`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
+	}
+
+	for _, pattern := range complexPatterns {
+		re, err := CompileRegex(pattern)
+		if err != nil {
+			t.Errorf("CompileRegex(%s) 失败: %v", pattern, err)
+		}
+		if re == nil {
+			t.Errorf("CompileRegex(%s) 返回 nil", pattern)
+		}
+	}
+}
+
 func TestCompileRegex_Caching(t *testing.T) {
 	ClearRegexCache()
 

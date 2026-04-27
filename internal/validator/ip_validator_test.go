@@ -43,6 +43,48 @@ func TestIsIPv4_InvalidIPv4(t *testing.T) {
 	}
 }
 
+func TestIsIPv4_LeadingZeros(t *testing.T) {
+	// 测试各种前导零情况
+	leadingZeroIPs := []string{
+		"010.0.0.1",
+		"192.0168.1.1",
+		"192.168.01.1",
+		"192.168.1.001",
+		"00.0.0.0",
+	}
+
+	for _, ip := range leadingZeroIPs {
+		if IsIPv4(ip) {
+			t.Errorf("IsIPv4(%s) 有前导零应返回 false", ip)
+		}
+	}
+}
+
+func TestIsIPv4_EdgeCases(t *testing.T) {
+	// 测试边界情况
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"0.0.0.0", true},
+		{"255.255.255.255", true},
+		{"1.2.3.4", true},
+		{"01.2.3.4", false},
+		{"1.02.3.4", false},
+		{"1.2.03.4", false},
+		{"1.2.3.04", false},
+		{"100.200.300.400", false},
+		{"999.999.999.999", false},
+	}
+
+	for _, tt := range tests {
+		result := IsIPv4(tt.ip)
+		if result != tt.expected {
+			t.Errorf("IsIPv4(%s) = %v, want %v", tt.ip, result, tt.expected)
+		}
+	}
+}
+
 func TestIsIPv4_IPv6ShouldReturnFalse(t *testing.T) {
 	ipv6Addresses := []string{
 		"::1",
@@ -137,6 +179,31 @@ func TestIsIPv6Compressed_NonIPv6(t *testing.T) {
 	}
 }
 
+func TestIsIPv6Compressed_EdgeCases(t *testing.T) {
+	// 测试边界情况
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"::", true},
+		{"::1", true},
+		{"1::", true},
+		{"1::1", true},
+		{"2001:db8::1", true},
+		{"2001:0db8:0000:0000:0000:0000:0000:0001", false},
+		{"fe80:0000:0000:0000:0000:0000:0000:0001", false},
+		{"192.168.1.1", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		result := IsIPv6Compressed(tt.ip)
+		if result != tt.expected {
+			t.Errorf("IsIPv6Compressed(%s) = %v, want %v", tt.ip, result, tt.expected)
+		}
+	}
+}
+
 // ============== IsIPv6Exploded 测试 ==============
 
 func TestIsIPv6Exploded_Valid(t *testing.T) {
@@ -176,6 +243,32 @@ func TestIsIPv6Exploded_NonIPv6(t *testing.T) {
 	for _, ip := range nonIPv6 {
 		if IsIPv6Exploded(ip) {
 			t.Errorf("IsIPv6Exploded(%s) 对非 IPv6 应返回 false", ip)
+		}
+	}
+}
+
+func TestIsIPv6Exploded_EdgeCases(t *testing.T) {
+	// 测试边界情况
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"2001:0db8:0000:0000:0000:0000:0000:0001", true},
+		{"fe80:0000:0000:0000:0000:0000:0000:0001", true},
+		{"0000:0000:0000:0000:0000:0000:0000:0001", true},
+		{"0000:0000:0000:0000:0000:0000:0000:0000", true},
+		{"::1", false},
+		{"fe80::1", false},
+		{"2001:db8::1", false},
+		{"::", false},
+		{"192.168.1.1", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		result := IsIPv6Exploded(tt.ip)
+		if result != tt.expected {
+			t.Errorf("IsIPv6Exploded(%s) = %v, want %v", tt.ip, result, tt.expected)
 		}
 	}
 }
