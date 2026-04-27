@@ -10,11 +10,12 @@ import (
 // FieldMapping 表示字段规则到实际字段值的映射
 // 用于处理 jump/array/loop 等动态字段映射规则
 type FieldMapping struct {
-	RuleIndex  int    // FieldRules 中的索引
-	FieldIndex int    // 实际字段数组中的索引（-1 表示字段不存在/被跳过）
-	Value      string // 字段值
-	Skipped    bool   // 是否因 jump 规则被跳过（字段在数据中不存在）
-	RepeatNo   int    // 重复字段的第几次重复（0-based），-1 表示非重复字段
+	RuleIndex     int    // FieldRules 中的索引
+	FieldIndex    int    // 实际字段数组中的索引（-1 表示字段不存在/被跳过）
+	Value         string // 字段值
+	Skipped       bool   // 是否因 jump 规则被跳过（字段在数据中不存在）
+	RepeatNo      int    // 重复字段的第几次重复（0-based），-1 表示非重复字段
+	CompoundValue string // 复合值（loop组字段用|拼接，如 DataType|DataLevel|DataContent）
 }
 
 // ArrayControl 描述 array 规则控制的字段组
@@ -208,6 +209,88 @@ func BuildFieldMapping(fields []string, fieldRules []parser.FieldRule, fieldNumb
 	}
 
 	return mappings
+}
+
+// BuildCompoundValues 为 loop(end=,) 字段构建复合值
+// 枚举规则中使用 DataType|DataLevel|DataContent 格式时，
+// 需要将同组的 loop(start=,) 和 loop(active=,) 字段值拼接后匹配
+func BuildCompoundValues(mappings []FieldMapping, fieldRules []parser.FieldRule) {
+	// 预扫描：找到所有 loop 组的 start/active/end 索引
+	type loopGroup struct {
+		startIdx  int
+		activeIdx int
+		endIdx    int
+	}
+	var groups []loopGroup
+
+	for i, rule := range fieldRules {
+		if strings.HasPrefix(rule.Loop, "loop(start=") {
+			group := loopGroup{startIdx: i}
+			// 向后找 active 和 end
+			for j := i + 1; j < len(fieldRules); j++ {
+				if strings.HasPrefix(fieldRules[j].Loop, "loop(active=") {
+					group.activeIdx = j
+				} else if strings.HasPrefix(fieldRules[j].Loop, "loop(end=") {
+					group.endIdx = j
+					break
+				}
+			}
+			if group.activeIdx > 0 && group.endIdx > 0 {
+				groups = append(groups, group)
+			}
+		}
+	}
+
+	if len(groups) == 0 {
+		return
+	}
+
+	// 为每个 loop(end=,) 映射构建复合值
+	for i, m := range mappings {
+		rule := fieldRules[m.RuleIndex]
+		if !strings.HasPrefix(rule.Loop, "loop(end=") || m.Skipped {
+			continue
+		}
+
+		// 找到所属的 loop 组
+		for _, g := range groups {
+			if m.RuleIndex != g.endIdx {
+				continue
+			}
+
+			// 查找同 RepeatNo 的 start 和 active 值
+			var startVal, activeVal string
+			for _, m2 := range mappings {
+				if m2.RepeatNo == m.RepeatNo {
+					if m2.RuleIndex == g.startIdx {
+						startVal = m2.Value
+					} else if m2.RuleIndex == g.activeIdx {
+						activeVal = m2.Value
+					}
+				}
+			}
+
+			// 对 end 字段的值：如果枚举规则含有 |（复合值格式），
+			// 则取逗号前的部分作为 code，因为枚举值格式为 "start|active|code"
+			// 而实际字段值可能是 "code,count" 格式
+			endVal := m.Value
+			hasPipeEnum := false
+			for _, r := range rule.Rules {
+				if strings.HasPrefix(r, "[") && strings.Contains(r, "|") {
+					hasPipeEnum = true
+					break
+				}
+			}
+			if hasPipeEnum && strings.Contains(endVal, ",") {
+				if idx := strings.Index(endVal, ","); idx > 0 {
+					endVal = endVal[:idx]
+				}
+			}
+
+			mappings[i].CompoundValue = startVal + "|" + activeVal + "|" + endVal
+			break
+		}
+	}
 }
 
 // buildArrayControlMap 预扫描字段规则，构建 array 控制映射

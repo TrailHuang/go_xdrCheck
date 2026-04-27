@@ -854,6 +854,9 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 		// 无动态规则时，映射为简单的 1:1 对应
 		mappings := BuildFieldMapping(fields, sheetConfig.FieldRules, sheetConfig.FieldNumberMap)
 
+		// 为 loop(end=,) 字段构建复合值（如 DataType|DataLevel|DataContent）
+		BuildCompoundValues(mappings, sheetConfig.FieldRules)
+
 		// 校验每个字段
 		// 更新验证器的行字段数据（用原始 fields 数组，用于条件表达式引用）
 		fieldValidator.AllFields = fields
@@ -958,8 +961,10 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			// 然后校验其他规则
 			for _, rule := range fieldRule.Rules {
-				if (actualRequired == "选填" && fieldValue == "") || (fieldRule.Required == "选填" && !conditionSatisfied) {
+				if (actualRequired == "选填" && fieldValue == "") || (fieldRule.Condition != "" && fieldRule.Required == "选填" && !conditionSatisfied) {
 					// 选填字段为空时，跳过规则校验
+					// 仅当字段有条件规则且条件不满足时，才跳过选填字段的校验
+					// 没有条件规则的选填字段，如果有值则必须校验
 				} else {
 					ruleValue := fieldValue
 					if fieldRule.Type == "base64" {
@@ -985,7 +990,15 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 					if fieldRule.ParsedEnums != nil {
 						pe = fieldRule.ParsedEnums[rule]
 					}
-					fieldValidator.Reset(ruleValue, mapping.RuleIndex, pe, nil)
+
+					// 对于 loop(end=,) 字段的枚举规则，使用复合值匹配
+					// 枚举格式如 [1|1|1001,1|1|1002] 需要 DataType|DataLevel|DataContent 拼接后匹配
+					enumRuleValue := ruleValue
+					if mapping.CompoundValue != "" && strings.HasPrefix(rule, "[") && strings.Contains(rule, "|") {
+						enumRuleValue = mapping.CompoundValue
+					}
+
+					fieldValidator.Reset(enumRuleValue, mapping.RuleIndex, pe, nil)
 					valid, msg := fieldValidator.ValidateRule(rule)
 					if !valid {
 						errors = append(errors, ValidationError{
