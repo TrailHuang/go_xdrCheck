@@ -162,7 +162,16 @@ func (x *XDRChecker) groupErrorsByFieldStruct(errors []ValidationError) map[stri
 }
 
 func (x *XDRChecker) createResultFile() (*os.File, error) {
-	resultDir := filepath.Join("/tmp/xdr_check", x.TimeParam)
+	var resultDir string
+	
+	// 如果指定了自定义目录，使用自定义目录
+	if x.ResultDir != "" {
+		resultDir = x.ResultDir
+	} else {
+		// 否则使用默认目录：/tmp/xdr_check/YYYYMMDD
+		resultDir = filepath.Join("/tmp/xdr_check", x.TimeParam)
+	}
+	
 	if err := os.MkdirAll(resultDir, 0755); err != nil {
 		return nil, err
 	}

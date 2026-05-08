@@ -2,8 +2,10 @@ package parser
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"xdrCheck/internal/config"
 
 	"github.com/360EntSecGroup-Skylar/excelize"
 )
@@ -40,7 +42,7 @@ type FieldRule struct {
 	Loop      string // 循环规则，如 "loop(start=,)"
 	Jump      string // 跳转规则，如 "jump=1"
 	Regex     string // 正则表达式，如 "reg=[^ ]+"
-
+	ConfigItem string // 配置项路径，如 "DEFAULT.manufacture_id"
 	// 预解析缓存（在 PreParseRules 中填充）
 	ParsedEnums     map[string]*ParsedEnumValue     // 枚举规则 -> 预解析结果
 	ParsedCondition *ParsedCondition                // 条件表达式预解析结果
@@ -62,7 +64,7 @@ type SheetConfig struct {
 	FieldNumberMap map[string]int // 字段编号到索引的映射（如 "11" -> 索引）
 }
 
-func ParseExcelTemplate(filePath string) ([]SheetConfig, error) {
+func ParseExcelTemplate(filePath string, cfg *config.Config) ([]SheetConfig, error) {
 	xlsx, err := excelize.OpenFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("打开Excel文件失败: %v", err)
@@ -70,11 +72,11 @@ func ParseExcelTemplate(filePath string) ([]SheetConfig, error) {
 
 	var sheetConfigs []SheetConfig
 
-	// 获取所有工作表（按顺序）
-	sheets := getOrderedSheetList(xlsx)
-
 	// 先解析文件校验工作表
 	fileConfigs := parseFileValidationSheet(xlsx)
+
+	// 获取所有工作表（按顺序）
+	sheets := getOrderedSheetList(xlsx)
 
 	// 然后解析其他工作表
 	for _, sheetName := range sheets {
@@ -83,7 +85,7 @@ func ParseExcelTemplate(filePath string) ([]SheetConfig, error) {
 			continue
 		}
 
-		sheetConfig, err := parseSheet(xlsx, sheetName)
+		sheetConfig, err := parseSheet(xlsx, sheetName, cfg)
 		if err != nil {
 			continue // 继续处理其他工作表，不中断整个流程
 		}
@@ -151,8 +153,8 @@ func parseFileValidationSheet(xlsx *excelize.File) []SheetConfig {
 	return configs
 }
 
-func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
-	config := SheetConfig{
+func parseSheet(xlsx *excelize.File, sheetName string, cfg *config.Config) (SheetConfig, error) {
+	sheetConfig := SheetConfig{
 		SheetName:      sheetName,
 		FieldNumberMap: make(map[string]int),
 	}
@@ -160,11 +162,11 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 	// 获取工作表的所有行
 	rows := xlsx.GetRows(sheetName)
 	if rows == nil {
-		return config, fmt.Errorf("无法获取工作表%s的行数据", sheetName)
+		return sheetConfig, fmt.Errorf("无法获取工作表%s的行数据", sheetName)
 	}
 
 	if len(rows) < 2 {
-		return config, nil
+		return sheetConfig, nil
 	}
 
 	// 解析表头，确定列索引
@@ -198,7 +200,7 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 
 		// 建立字段编号到索引的映射
 		if fieldNumber != "" {
-			config.FieldNumberMap[fieldNumber] = len(config.FieldRules)
+			sheetConfig.FieldNumberMap[fieldNumber] = len(sheetConfig.FieldRules)
 		}
 
 		fieldRule := FieldRule{
@@ -245,10 +247,32 @@ func parseSheet(xlsx *excelize.File, sheetName string) (SheetConfig, error) {
 			}
 		}
 
-		config.FieldRules = append(config.FieldRules, fieldRule)
+		// 获取配置项
+		if configItemIndex, exists := colIndex["配置项"]; exists && configItemIndex < len(row) {
+			configItem := strings.TrimSpace(row[configItemIndex])
+			if configItem != "" && configItem != "NaN" {
+				fieldRule.ConfigItem = configItem
+			}
+		}
+
+		// 处理配置项覆盖：如果配置项存在且不为空，则使用配置项的值替换规则
+		if fieldRule.ConfigItem != "" && cfg != nil {
+			configValue := config.GetConfigValue(cfg, fieldRule.ConfigItem)
+			if configValue != "" {
+				originalRules := strings.Join(fieldRule.Rules, ";")
+				log.Printf("[配置项替换] Sheet: %s | 字段: %s | 校验规则: %s => 配置内容: %s",
+					sheetName, fieldRule.FieldName, originalRules, configValue)
+				fieldRule.Rules = parseRules(configValue)
+				NewRules := strings.Join(fieldRule.Rules, ";")
+				log.Printf("[生效的校验规则] Sheet: %s | 字段: %s | 校验规则: %s",
+					sheetName, fieldRule.FieldName, NewRules)
+			}
+		}
+
+		sheetConfig.FieldRules = append(sheetConfig.FieldRules, fieldRule)
 	}
 
-	return config, nil
+	return sheetConfig, nil
 }
 
 func parseRules(ruleStr string) []string {

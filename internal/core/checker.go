@@ -28,6 +28,7 @@ type CheckerConfig struct {
 	NoSubPath    bool           // 是否检查子路径
 	WorkerNum    int            // 协程数
 	ReportFormat string         // 报告格式
+	ResultDir    string         // 报告输出目录（可选，默认为 /tmp/xdr_check/YYYYMMDD）
 }
 
 // TableReportConfig 表格报告配置
@@ -92,6 +93,7 @@ type XDRChecker struct {
 	mu           sync.Mutex
 	WorkerNum    int    // 协程数，默认4
 	ReportFormat string // 报告格式：txt, table, html
+	ResultDir    string // 报告输出目录
 }
 
 // NewXDRChecker 创建新的XDR检查器（使用结构体参数）
@@ -113,6 +115,7 @@ func NewXDRChecker(config CheckerConfig) *XDRChecker {
 		NoSubPath:    config.NoSubPath,
 		WorkerNum:    config.WorkerNum,
 		ReportFormat: config.ReportFormat,
+		ResultDir:    config.ResultDir,
 	}
 }
 
@@ -157,7 +160,7 @@ func (x *XDRChecker) StartCheck() error {
 	}
 
 	// 解析Excel模板
-	sheetConfigs, err := parser.ParseExcelTemplate(x.Config.TemplateFile)
+	sheetConfigs, err := parser.ParseExcelTemplate(x.Config.TemplateFile, x.Config)
 	if err != nil {
 		return fmt.Errorf("解析模板文件失败: %v", err)
 	}
@@ -379,7 +382,6 @@ func decodeBase64(encoded string) (string, error) {
 	// 将解码后的部分用逗号连接
 	return strings.Join(decodedParts, ","), nil
 }
-
 
 // worker 协程处理函数
 func (x *XDRChecker) worker(id int, taskChan <-chan CheckTask, resultChan chan<- CheckResult, wg *sync.WaitGroup) {
@@ -662,10 +664,18 @@ func (x *XDRChecker) handleLocalToCU(filename string, sheetConfig parser.SheetCo
 }
 
 func (x *XDRChecker) createResultDirectory() string {
-	// 创建结果目录，格式：/tmp/xdr_check/YYYYMMDD
-	now := time.Now()
-	dateStr := now.Format("20060102")
-	resultDir := filepath.Join("/tmp/xdr_check", dateStr)
+	// 创建结果目录
+	var resultDir string
+
+	// 如果指定了自定义目录，使用自定义目录
+	if x.ResultDir != "" {
+		resultDir = x.ResultDir
+	} else {
+		// 否则使用默认目录：/tmp/xdr_check/YYYYMMDD
+		now := time.Now()
+		dateStr := now.Format("20060102")
+		resultDir = filepath.Join("/tmp/xdr_check", dateStr)
+	}
 
 	// 检查目录是否存在
 	if _, err := os.Stat(resultDir); err == nil {
