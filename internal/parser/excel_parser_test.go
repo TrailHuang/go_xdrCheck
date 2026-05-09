@@ -1,7 +1,11 @@
 package parser
 
 import (
+	"fmt"
 	"testing"
+	"xdrCheck/internal/config"
+
+	"github.com/360EntSecGroup-Skylar/excelize"
 )
 
 // ============== parseRules 测试 ==============
@@ -478,5 +482,180 @@ func TestMergeSheetConfigs_DifferentSheets(t *testing.T) {
 	merged := mergeSheetConfigs(fileConfigs, sheetConfigs)
 	if len(merged) != 2 {
 		t.Errorf("应有 2 个配置, 实际为 %d", len(merged))
+	}
+}
+
+// ============== 配置项覆盖测试 ==============
+
+func TestParseSheet_ConfigItemOverride(t *testing.T) {
+	xlsx := excelize.NewFile()
+
+	sheetName := "TestSheet"
+	index := xlsx.NewSheet(sheetName)
+	xlsx.SetActiveSheet(index)
+
+	headers := []string{"字段编号", "字段名", "属性", "类型", "校验规则", "配置项"}
+	for i, header := range headers {
+		cell := fmt.Sprintf("%c1", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, header)
+	}
+
+	rowData := []string{
+		"1",
+		"test_field",
+		"必填",
+		"string",
+		"len_ge(5);len_le(10)",
+		"DEFAULT.test_config",
+	}
+	for i, data := range rowData {
+		cell := fmt.Sprintf("%c2", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, data)
+	}
+
+	cfg := &config.Config{}
+
+	sheetConfig, err := parseSheet(xlsx, sheetName, cfg)
+	if err != nil {
+		t.Fatalf("解析工作表失败: %v", err)
+	}
+
+	if len(sheetConfig.FieldRules) != 1 {
+		t.Fatalf("应解析出 1 个字段规则, 实际为 %d", len(sheetConfig.FieldRules))
+	}
+
+	fieldRule := sheetConfig.FieldRules[0]
+	if fieldRule.FieldName != "test_field" {
+		t.Errorf("字段名应为 'test_field', 实际为 %s", fieldRule.FieldName)
+	}
+
+	if fieldRule.ConfigItem != "DEFAULT.test_config" {
+		t.Errorf("配置项应为 'DEFAULT.test_config', 实际为 %s", fieldRule.ConfigItem)
+	}
+
+	if len(fieldRule.Rules) != 2 {
+		t.Errorf("无配置覆盖时应保留 2 个原始规则, 实际为 %d", len(fieldRule.Rules))
+	}
+}
+
+func TestParseSheet_ConfigItemEmpty(t *testing.T) {
+	xlsx := excelize.NewFile()
+
+	sheetName := "TestSheet"
+	index := xlsx.NewSheet(sheetName)
+	xlsx.SetActiveSheet(index)
+
+	headers := []string{"字段编号", "字段名", "属性", "类型", "校验规则", "配置项"}
+	for i, header := range headers {
+		cell := fmt.Sprintf("%c1", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, header)
+	}
+
+	rowData := []string{
+		"1",
+		"test_field",
+		"必填",
+		"string",
+		"len_ge(5)",
+		"",
+	}
+	for i, data := range rowData {
+		cell := fmt.Sprintf("%c2", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, data)
+	}
+
+	sheetConfig, err := parseSheet(xlsx, sheetName, nil)
+	if err != nil {
+		t.Fatalf("解析工作表失败: %v", err)
+	}
+
+	if len(sheetConfig.FieldRules) != 1 {
+		t.Fatalf("应解析出 1 个字段规则, 实际为 %d", len(sheetConfig.FieldRules))
+	}
+
+	fieldRule := sheetConfig.FieldRules[0]
+	if fieldRule.ConfigItem != "" {
+		t.Errorf("空配置项应为空字符串, 实际为 %s", fieldRule.ConfigItem)
+	}
+}
+
+func TestParseSheet_ConfigItemNaN(t *testing.T) {
+	xlsx := excelize.NewFile()
+
+	sheetName := "TestSheet"
+	index := xlsx.NewSheet(sheetName)
+	xlsx.SetActiveSheet(index)
+
+	headers := []string{"字段编号", "字段名", "属性", "类型", "校验规则", "配置项"}
+	for i, header := range headers {
+		cell := fmt.Sprintf("%c1", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, header)
+	}
+
+	rowData := []string{
+		"1",
+		"test_field",
+		"必填",
+		"string",
+		"len_ge(5)",
+		"NaN",
+	}
+	for i, data := range rowData {
+		cell := fmt.Sprintf("%c2", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, data)
+	}
+
+	sheetConfig, err := parseSheet(xlsx, sheetName, nil)
+	if err != nil {
+		t.Fatalf("解析工作表失败: %v", err)
+	}
+
+	if len(sheetConfig.FieldRules) != 1 {
+		t.Fatalf("应解析出 1 个字段规则, 实际为 %d", len(sheetConfig.FieldRules))
+	}
+
+	fieldRule := sheetConfig.FieldRules[0]
+	if fieldRule.ConfigItem != "" {
+		t.Errorf("NaN配置项应被忽略, 实际为 %s", fieldRule.ConfigItem)
+	}
+}
+
+func TestParseSheet_NoConfigItemColumn(t *testing.T) {
+	xlsx := excelize.NewFile()
+
+	sheetName := "TestSheet"
+	index := xlsx.NewSheet(sheetName)
+	xlsx.SetActiveSheet(index)
+
+	headers := []string{"字段编号", "字段名", "属性", "类型", "校验规则"}
+	for i, header := range headers {
+		cell := fmt.Sprintf("%c1", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, header)
+	}
+
+	rowData := []string{
+		"1",
+		"test_field",
+		"必填",
+		"string",
+		"len_ge(5)",
+	}
+	for i, data := range rowData {
+		cell := fmt.Sprintf("%c2", 'A'+i)
+		xlsx.SetCellValue(sheetName, cell, data)
+	}
+
+	sheetConfig, err := parseSheet(xlsx, sheetName, nil)
+	if err != nil {
+		t.Fatalf("解析工作表失败: %v", err)
+	}
+
+	if len(sheetConfig.FieldRules) != 1 {
+		t.Fatalf("应解析出 1 个字段规则, 实际为 %d", len(sheetConfig.FieldRules))
+	}
+
+	fieldRule := sheetConfig.FieldRules[0]
+	if fieldRule.ConfigItem != "" {
+		t.Errorf("无配置项列时配置项应为空, 实际为 %s", fieldRule.ConfigItem)
 	}
 }

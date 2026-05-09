@@ -259,13 +259,17 @@ func parseSheet(xlsx *excelize.File, sheetName string, cfg *config.Config) (Shee
 		if fieldRule.ConfigItem != "" && cfg != nil {
 			configValue := config.GetConfigValue(cfg, fieldRule.ConfigItem)
 			if configValue != "" {
-				originalRules := strings.Join(fieldRule.Rules, ";")
-				log.Printf("[配置项替换] Sheet: %s | 字段: %s | 校验规则: %s => 配置内容: %s",
-					sheetName, fieldRule.FieldName, originalRules, configValue)
-				fieldRule.Rules = parseRules(configValue)
-				NewRules := strings.Join(fieldRule.Rules, ";")
-				log.Printf("[生效的校验规则] Sheet: %s | 字段: %s | 校验规则: %s",
-					sheetName, fieldRule.FieldName, NewRules)
+				newRules := parseRules(configValue)
+				if len(newRules) > 0 {
+					log.Printf("[配置项替换] Sheet: %s | 字段: %s | 原规则: %s => 配置内容: %s",
+						sheetName, fieldRule.FieldName, strings.Join(fieldRule.Rules, ";"), configValue)
+					fieldRule.Rules = newRules
+					log.Printf("[生效的校验规则] Sheet: %s | 字段: %s | 新规则: %s",
+						sheetName, fieldRule.FieldName, strings.Join(fieldRule.Rules, ";"))
+				} else {
+					log.Printf("[配置项警告] Sheet: %s | 字段: %s | 配置项: %s 解析后无有效规则",
+						sheetName, fieldRule.FieldName, fieldRule.ConfigItem)
+				}
 			}
 		}
 
