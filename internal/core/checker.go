@@ -874,7 +874,7 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			fieldRule := sheetConfig.FieldRules[mapping.RuleIndex]
 
 			// 跳过因 jump 规则而不存在的字段
- 			if mapping.Skipped {
+			if mapping.Skipped {
 				continue
 			}
 
@@ -1049,6 +1049,13 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 				}
 			}
 		}
+
+		// 特殊校验：针对 0x31+0x06c0 sheet 的 AssetsNum 字段
+		// AssetsNum 应该等于所有 DataContent 字段的次数之和
+		if sheetConfig.SheetName == "0x31+0x06c0" || sheetConfig.SheetName == "0x31 + 0x06c0" {
+			assetsNumErrors := validateAssetsNumConsistency(sheetConfig, line, lineNum, filename, x.Config.ColDelimiter)
+			errors = append(errors, assetsNumErrors...)
+		}
 	}
 
 	lineCount = lineNum
@@ -1219,4 +1226,106 @@ func ClearOldTmpDirs(baseDir string, keepDays int) error {
 	}
 
 	return nil
+}
+
+// validateAssetsNumConsistency 校验 AssetsNum 字段与 DataContent 中包含的数据匹配数量的一致性
+// AssetsNum 应该等于所有 DataContent 字段的次数之和
+// DataContent 格式: "1001,1" 其中逗号后的数字为次数
+func validateAssetsNumConsistency(sheetConfig parser.SheetConfig, line string, lineNum int, filename string, delimiter string) []ValidationError {
+	var errors []ValidationError
+
+	// 解析字段
+	fields := strings.Split(line, delimiter)
+	if len(fields) == 0 {
+		return errors
+	}
+
+	// 查找 AssetsNum 和 DataContent 字段的索引
+	assetsNumIndex := -1
+	dataContentIndices := []int{}
+
+	for i, rule := range sheetConfig.FieldRules {
+		if rule.FieldName == "AssetsNum" {
+			assetsNumIndex = i
+		}
+		if rule.FieldName == "DataContent" {
+			dataContentIndices = append(dataContentIndices, i)
+		}
+	}
+
+	// 如果找不到相关字段，直接返回
+	if assetsNumIndex == -1 || len(dataContentIndices) == 0 {
+		return errors
+	}
+
+	// 获取 AssetsNum 的值
+	if assetsNumIndex >= len(fields) {
+		return errors
+	}
+	assetsNumStr := strings.TrimSpace(fields[assetsNumIndex])
+	if assetsNumStr == "" {
+		return errors // AssetsNum 为空，跳过校验
+	}
+
+	// 解析 AssetsNum
+	var expectedCount int
+	_, err := fmt.Sscanf(assetsNumStr, "%d", &expectedCount)
+	if err != nil {
+		// AssetsNum 不是有效整数，跳过校验
+		return errors
+	}
+
+	// 计算所有 DataContent 字段的次数总和
+	actualCount := 0
+	// 使用 BuildFieldMapping 来处理 loop 展开
+	mappings := BuildFieldMapping(fields, sheetConfig.FieldRules, sheetConfig.FieldNumberMap)
+
+	// 遍历所有映射，找到属于 DataContent 的字段
+	for _, mapping := range mappings {
+		// 检查该映射是否对应 DataContent 规则
+		isDataContent := false
+		for _, dcRuleIndex := range dataContentIndices {
+			if mapping.RuleIndex == dcRuleIndex {
+				isDataContent = true
+				break
+			}
+		}
+
+		if isDataContent && !mapping.Skipped {
+			dataContentValue := mapping.Value
+			if dataContentValue == "" {
+				continue
+			}
+
+			// DataContent 格式: "1001,1" 或 "1045,3"
+			// 提取逗号后的次数
+			parts := strings.Split(dataContentValue, ",")
+			if len(parts) == 2 {
+				countStr := strings.TrimSpace(parts[1])
+				var count int
+				_, err := fmt.Sscanf(countStr, "%d", &count)
+				if err == nil {
+					actualCount += count
+				}
+			}
+		}
+	}
+
+	// 比较期望值和实际值
+	if expectedCount != actualCount {
+		errors = append(errors, ValidationError{
+			Filename:   filename,
+			LineNum:    lineNum,
+			FieldIndex: assetsNumIndex + 1,
+			FieldName:  "AssetsNum",
+			ErrorType:  "rule",
+			RuleOrType: "AssetsNum一致性校验",
+			Message: fmt.Sprintf("数安识别日志数据数量字段与DataContent中包含的数据匹配数量的加总和不一致: AssetsNum=%d, DataContent次数总和=%d",
+				expectedCount, actualCount),
+			FieldValue: assetsNumStr,
+			FullLine:   line,
+		})
+	}
+
+	return errors
 }
