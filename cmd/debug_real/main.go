@@ -11,7 +11,7 @@ import (
 
 func main() {
 	templatePath := os.Args[1]
-	sheetConfigs, err := parser.ParseExcelTemplate(templatePath)
+	sheetConfigs, err := parser.ParseExcelTemplate(templatePath, nil)
 	if err != nil {
 		panic(err)
 	}

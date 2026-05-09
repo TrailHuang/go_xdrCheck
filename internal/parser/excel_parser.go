@@ -25,27 +25,27 @@ type ParsedEnumValue struct {
 
 // ParsedCondition 预解析的条件表达式
 type ParsedCondition struct {
-	FieldIndex    int              // 字段索引
+	FieldIndex    int                 // 字段索引
 	ExpectedExact map[string]struct{} // 等于条件的期望值列表
-	ExpectedOrder []string         // 期望值的有序列表，用于条件类型映射（如 if($12==1,2);type=ipv4,ipv6）
-	IsEqual       bool             // true: ==, false: !=
+	ExpectedOrder []string            // 期望值的有序列表，用于条件类型映射（如 if($12==1,2);type=ipv4,ipv6）
+	IsEqual       bool                // true: ==, false: !=
 }
 
 type FieldRule struct {
-	FieldName string
-	Required  string // "必填" or "选填" or "空"
-	Type      string // 数据类型 (int, ip, datetime, etc.)
-	Rules     []string
-	Condition string // 条件表达式，如 "if($13==5,8)"
-	Offset    string // 偏移规则，如 "offset(6,4)"
-	Array     string // 数组规则，如 "array(10,11,12)"
-	Loop      string // 循环规则，如 "loop(start=,)"
-	Jump      string // 跳转规则，如 "jump=1"
-	Regex     string // 正则表达式，如 "reg=[^ ]+"
+	FieldName  string
+	Required   string // "必填" or "选填" or "空"
+	Type       string // 数据类型 (int, ip, datetime, etc.)
+	Rules      []string
+	Condition  string // 条件表达式，如 "if($13==5,8)"
+	Offset     string // 偏移规则，如 "offset(6,4)"
+	Array      string // 数组规则，如 "array(10,11,12)"
+	Loop       string // 循环规则，如 "loop(start=,)"
+	Jump       string // 跳转规则，如 "jump=1"
+	Regex      string // 正则表达式，如 "reg=[^ ]+"
 	ConfigItem string // 配置项路径，如 "DEFAULT.manufacture_id"
 	// 预解析缓存（在 PreParseRules 中填充）
-	ParsedEnums     map[string]*ParsedEnumValue     // 枚举规则 -> 预解析结果
-	ParsedCondition *ParsedCondition                // 条件表达式预解析结果
+	ParsedEnums     map[string]*ParsedEnumValue // 枚举规则 -> 预解析结果
+	ParsedCondition *ParsedCondition            // 条件表达式预解析结果
 }
 
 type FileValidationConfig struct {

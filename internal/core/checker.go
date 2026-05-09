@@ -874,7 +874,7 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			fieldRule := sheetConfig.FieldRules[mapping.RuleIndex]
 
 			// 跳过因 jump 规则而不存在的字段
-			if mapping.Skipped {
+ 			if mapping.Skipped {
 				continue
 			}
 
@@ -971,46 +971,16 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			// 然后校验其他规则
 			for _, rule := range fieldRule.Rules {
-				if (actualRequired == "选填" && fieldValue == "") || (fieldRule.Condition != "" && fieldRule.Required == "选填" && !conditionSatisfied) {
-					// 选填字段为空时，跳过规则校验
-					// 仅当字段有条件规则且条件不满足时，才跳过选填字段的校验
-					// 没有条件规则的选填字段，如果有值则必须校验
-				} else {
-					ruleValue := fieldValue
-					if fieldRule.Type == "base64" {
-						decoded, err := decodeBase64(fieldValue)
-						if err != nil {
-							errors = append(errors, ValidationError{
-								Filename:   filename,
-								LineNum:    lineNum,
-								FieldIndex: fieldIndexForError,
-								FieldName:  fieldDisplayName,
-								ErrorType:  "rule",
-								RuleOrType: rule,
-								Message:    fmt.Sprintf("base64解码失败: %v", err),
-								FieldValue: fieldValue,
-								FullLine:   line,
-							})
-							continue
-						}
-						ruleValue = decoded
-					}
+				// 选填字段为空时，跳过规则校验
+				// 选填字段有值时，无论条件是否满足，都必须校验
+				if actualRequired == "选填" && fieldValue == "" {
+					continue
+				}
 
-					var pe *parser.ParsedEnumValue
-					if fieldRule.ParsedEnums != nil {
-						pe = fieldRule.ParsedEnums[rule]
-					}
-
-					// 对于 loop(end=,) 字段的枚举规则，使用复合值匹配
-					// 枚举格式如 [1|1|1001,1|1|1002] 需要 DataType|DataLevel|DataContent 拼接后匹配
-					enumRuleValue := ruleValue
-					if mapping.CompoundValue != "" && strings.HasPrefix(rule, "[") && strings.Contains(rule, "|") {
-						enumRuleValue = mapping.CompoundValue
-					}
-
-					fieldValidator.Reset(enumRuleValue, mapping.RuleIndex, pe, nil)
-					valid, msg := fieldValidator.ValidateRule(rule)
-					if !valid {
+				ruleValue := fieldValue
+				if fieldRule.Type == "base64" {
+					decoded, err := decodeBase64(fieldValue)
+					if err != nil {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
 							LineNum:    lineNum,
@@ -1018,51 +988,63 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 							FieldName:  fieldDisplayName,
 							ErrorType:  "rule",
 							RuleOrType: rule,
-							Message:    msg,
-							FieldValue: ruleValue,
+							Message:    fmt.Sprintf("base64解码失败: %v", err),
+							FieldValue: fieldValue,
 							FullLine:   line,
 						})
+						continue
 					}
+					ruleValue = decoded
+				}
+
+				var pe *parser.ParsedEnumValue
+				if fieldRule.ParsedEnums != nil {
+					pe = fieldRule.ParsedEnums[rule]
+				}
+
+				// 对于 loop(end=,) 字段的枚举规则，使用复合值匹配
+				// 枚举格式如 [1|1|1001,1|1|1002] 需要 DataType|DataLevel|DataContent 拼接后匹配
+				enumRuleValue := ruleValue
+				if mapping.CompoundValue != "" && strings.HasPrefix(rule, "[") && strings.Contains(rule, "|") {
+					enumRuleValue = mapping.CompoundValue
+				}
+
+				fieldValidator.Reset(enumRuleValue, mapping.RuleIndex, pe, nil)
+				valid, msg := fieldValidator.ValidateRule(rule)
+				if !valid {
+					errors = append(errors, ValidationError{
+						Filename:   filename,
+						LineNum:    lineNum,
+						FieldIndex: fieldIndexForError,
+						FieldName:  fieldDisplayName,
+						ErrorType:  "rule",
+						RuleOrType: rule,
+						Message:    msg,
+						FieldValue: ruleValue,
+						FullLine:   line,
+					})
 				}
 			}
 
 			// 校验属性中的正则规则
 			// 如: if($12==5,8,12,17);reg=[^ ]+
-			// 条件满足时: 字段必须匹配正则
-			// 条件不满足时: 字段应为空或空格
+			// 字段有内容时: 无论条件是否满足，都校验正则
+			// 选填字段为空时: 跳过校验
 			if fieldRule.Regex != "" {
 				if !(actualRequired == "选填" && fieldValue == "") {
-					if conditionSatisfied {
-						re, err := validator.GetRegex(fieldRule.Regex)
-						if err == nil && !re.MatchString(fieldValue) {
-							errors = append(errors, ValidationError{
-								Filename:   filename,
-								LineNum:    lineNum,
-								FieldIndex: fieldIndexForError,
-								FieldName:  fieldDisplayName,
-								ErrorType:  "rule",
-								RuleOrType: "reg=" + fieldRule.Regex,
-								Message:    "字段值不符合正则表达式规则",
-								FieldValue: fieldValue,
-								FullLine:   line,
-							})
-						}
-					} else if fieldRule.Condition != "" {
-						// 条件不满足时，字段应为空或仅含空格
-						// 如: if($12==5,8);reg=[^ ]+ → 不满足条件时只能是空格
-						if strings.TrimSpace(fieldValue) != "" {
-							errors = append(errors, ValidationError{
-								Filename:   filename,
-								LineNum:    lineNum,
-								FieldIndex: fieldIndexForError,
-								FieldName:  fieldDisplayName,
-								ErrorType:  "rule",
-								RuleOrType: "reg=" + fieldRule.Regex,
-								Message:    "条件不满足时字段应为空或空格",
-								FieldValue: fieldValue,
-								FullLine:   line,
-							})
-						}
+					re, err := validator.GetRegex(fieldRule.Regex)
+					if err == nil && !re.MatchString(fieldValue) {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: fieldIndexForError,
+							FieldName:  fieldDisplayName,
+							ErrorType:  "rule",
+							RuleOrType: "reg=" + fieldRule.Regex,
+							Message:    "字段值不符合正则表达式规则",
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
 					}
 				}
 			}
