@@ -114,3 +114,4 @@ func TestValidateAssetsNumConsistency_EmptyAssetsNum(t *testing.T) {
 		t.Log("测试通过：AssetsNum为空时跳过校验")
 	}
 }
+
