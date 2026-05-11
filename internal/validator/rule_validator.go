@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"xdrCheck/internal/parser"
 )
 
 type RuleValidator struct {
@@ -14,6 +16,13 @@ type RuleValidator struct {
 	FieldIndex     int
 	AllFields      []string
 	FieldNumberMap map[string]int // 字段编号到索引的映射（如 "11" -> 索引）
+	ParsedEnum     *parser.ParsedEnumValue     // 预解析的枚举规则缓存
+	ParsedCond     *parser.ParsedCondition     // 预解析的条件规则缓存
+
+	// 数值解析缓存
+	parsedIntValue  int64
+	parsedIntValid  bool
+	parsedIntDone   bool
 }
 
 func NewRuleValidator(fieldValue string, fieldIndex int, allFields []string, fieldNumberMap map[string]int) *RuleValidator {
@@ -25,9 +34,57 @@ func NewRuleValidator(fieldValue string, fieldIndex int, allFields []string, fie
 	}
 }
 
+// NewRuleValidatorWithCache 创建带预解析缓存的验证器
+func NewRuleValidatorWithCache(fieldValue string, fieldIndex int, allFields []string, fieldNumberMap map[string]int, parsedEnum *parser.ParsedEnumValue, parsedCond *parser.ParsedCondition) *RuleValidator {
+	return &RuleValidator{
+		FieldValue:     fieldValue,
+		FieldIndex:     fieldIndex,
+		AllFields:      allFields,
+		FieldNumberMap: fieldNumberMap,
+		ParsedEnum:     parsedEnum,
+		ParsedCond:     parsedCond,
+	}
+}
+
+// Reset 重置验证器状态，复用已分配的对象避免 GC 压力
+// allFields 和 fieldNumberMap 通常在同一行内不变，可以保留
+func (rv *RuleValidator) Reset(fieldValue string, fieldIndex int, parsedEnum *parser.ParsedEnumValue, parsedCond *parser.ParsedCondition) {
+	rv.FieldValue = fieldValue
+	rv.FieldIndex = fieldIndex
+	rv.ParsedEnum = parsedEnum
+	rv.ParsedCond = parsedCond
+	// 重置数值缓存
+	rv.parsedIntDone = false
+	rv.parsedIntValid = false
+	rv.parsedIntValue = 0
+}
+
+// getCachedIntValue 获取缓存中字段值的整数解析结果
+func (rv *RuleValidator) getCachedIntValue() (int64, bool) {
+	if !rv.parsedIntDone {
+		var err error
+		rv.parsedIntValue, err = strconv.ParseInt(rv.FieldValue, 10, 64)
+		rv.parsedIntValid = (err == nil)
+		rv.parsedIntDone = true
+	}
+	return rv.parsedIntValue, rv.parsedIntValid
+}
+
 // 校验类型主函数
 func (rv *RuleValidator) ValidateType(dataType string) (bool, string) {
 	dataType = strings.TrimSpace(dataType)
+
+	// 处理逗号分隔的复合类型（如 "ipv4,ipv6"）
+	if strings.Contains(dataType, ",") {
+		types := strings.Split(dataType, ",")
+		for _, t := range types {
+			t = strings.TrimSpace(t)
+			if valid, _ := rv.ValidateType(t); valid {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("不符合%s格式", dataType)
+	}
 
 	switch dataType {
 	case "int":
@@ -43,15 +100,15 @@ func (rv *RuleValidator) ValidateType(dataType string) (bool, string) {
 	case "ipv6":
 		return rv.validateIPv6()
 	case "ip_compressed":
-		if IsIPv6Compressed(rv.FieldValue) {
+		if IsIPv4(rv.FieldValue) || IsIPv6Compressed(rv.FieldValue) {
 			return true, ""
 		}
-		return false, "不是有效的IPv6压缩格式"
+		return false, "不是有效的ip_compressed格式(IPv4或IPv6压缩格式)"
 	case "ip_exploded":
-		if IsIPv6Exploded(rv.FieldValue) {
+		if IsIPv4(rv.FieldValue) || IsIPv6Exploded(rv.FieldValue) {
 			return true, ""
 		}
-		return false, "不是有效的IPv6展开格式"
+		return false, "不是有效的ip_exploded格式(IPv4或IPv6展开格式)"
 	case "datetime":
 		return rv.validateDateTime()
 	case "base64":
@@ -93,8 +150,8 @@ func (rv *RuleValidator) validateInteger() (bool, string) {
 		return true, "" // 空值跳过校验
 	}
 
-	_, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	_, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "不是有效的整数"
 	}
 	return true, ""
@@ -138,11 +195,28 @@ func (rv *RuleValidator) validateDateTime() (bool, string) {
 }
 
 // Base64编码校验
+// 支持逗号分隔的多个base64字符串
 func (rv *RuleValidator) validateBase64() (bool, string) {
 	if rv.FieldValue == "" {
 		return true, "" // 空值跳过校验
 	}
 
+	// 检查是否包含逗号（多个base64值）
+	if strings.Contains(rv.FieldValue, ",") {
+		parts := strings.Split(rv.FieldValue, ",")
+		for i, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, err := base64.StdEncoding.DecodeString(part); err != nil {
+				return false, fmt.Sprintf("第%d个base64值不是有效的Base64编码", i+1)
+			}
+		}
+		return true, ""
+	}
+
+	// 单个base64值
 	_, err := base64.StdEncoding.DecodeString(rv.FieldValue)
 	if err != nil {
 		return false, "不是有效的Base64编码"
@@ -288,8 +362,8 @@ func (rv *RuleValidator) validateSizeEqual(rule string) (bool, string) {
 		return false, "大小规则格式错误"
 	}
 
-	actualSize, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	actualSize, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -305,8 +379,8 @@ func (rv *RuleValidator) validateSizeGreater(rule string) (bool, string) {
 		return false, "大小规则格式错误"
 	}
 
-	actualSize, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	actualSize, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -322,8 +396,8 @@ func (rv *RuleValidator) validateSizeLess(rule string) (bool, string) {
 		return false, "大小规则格式错误"
 	}
 
-	actualSize, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	actualSize, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -339,8 +413,8 @@ func (rv *RuleValidator) validateSizeGreaterEqual(rule string) (bool, string) {
 		return false, "大小规则格式错误"
 	}
 
-	actualSize, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	actualSize, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -356,8 +430,8 @@ func (rv *RuleValidator) validateSizeLessEqual(rule string) (bool, string) {
 		return false, "大小规则格式错误"
 	}
 
-	actualSize, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	actualSize, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -416,8 +490,8 @@ func (rv *RuleValidator) validateRange(rule string) (bool, string) {
 		return false, "范围规则格式错误"
 	}
 
-	value, err := strconv.ParseInt(rv.FieldValue, 10, 64)
-	if err != nil {
+	value, valid := rv.getCachedIntValue()
+	if !valid {
 		return false, "字段值不是有效数字"
 	}
 
@@ -430,6 +504,12 @@ func (rv *RuleValidator) validateRange(rule string) (bool, string) {
 
 // 枚举校验
 func (rv *RuleValidator) validateEnum(rule string) (bool, string) {
+	// 优先使用预解析缓存
+	if rv.ParsedEnum != nil {
+		return rv.validateEnumParsed(rv.ParsedEnum)
+	}
+
+	// 回退到原始逻辑（兼容旧调用方式）
 	rule = strings.Trim(rule, "[]")
 	validValues := strings.Split(rule, ",")
 
@@ -463,6 +543,28 @@ func (rv *RuleValidator) validateEnum(rule string) (bool, string) {
 	return false, fmt.Sprintf("字段值不在允许的范围内: %s", rule)
 }
 
+// validateEnumParsed 使用预解析结果进行枚举校验（零Split开销）
+func (rv *RuleValidator) validateEnumParsed(pe *parser.ParsedEnumValue) (bool, string) {
+	// 先检查精确匹配
+	if _, ok := pe.ExactValues[rv.FieldValue]; ok {
+		return true, ""
+	}
+
+	// 再检查范围匹配
+	if len(pe.Ranges) > 0 {
+		fieldValue, err := strconv.ParseInt(rv.FieldValue, 10, 64)
+		if err == nil {
+			for _, r := range pe.Ranges {
+				if fieldValue >= r.Min && fieldValue <= r.Max {
+					return true, ""
+				}
+			}
+		}
+	}
+
+	return false, fmt.Sprintf("字段值不在允许的范围内: %s", pe.RawRule)
+}
+
 // 基础规则校验
 func (rv *RuleValidator) validateBasicRule(rule string) (bool, string) {
 	switch rule {
@@ -479,12 +581,12 @@ func (rv *RuleValidator) validateBasicRule(rule string) (bool, string) {
 			return false, "不是有效的IPv6地址"
 		}
 	case "ip_compressed":
-		if !IsIPv6Compressed(rv.FieldValue) {
-			return false, "不是有效的IPv6压缩格式"
+		if !IsIPv4(rv.FieldValue) && !IsIPv6Compressed(rv.FieldValue) {
+			return false, "不是有效的ip_compressed格式(IPv4或IPv6压缩格式)"
 		}
 	case "ip_exploded":
-		if !IsIPv6Exploded(rv.FieldValue) {
-			return false, "不是有效的IPv6展开格式"
+		if !IsIPv4(rv.FieldValue) && !IsIPv6Exploded(rv.FieldValue) {
+			return false, "不是有效的ip_exploded格式(IPv4或IPv6展开格式)"
 		}
 	case "base64":
 		if _, err := base64.StdEncoding.DecodeString(rv.FieldValue); err != nil {
@@ -510,6 +612,12 @@ func (rv *RuleValidator) ValidateCondition(condition string) (bool, string) {
 		return true, ""
 	}
 
+	// 优先使用预解析缓存
+	if rv.ParsedCond != nil {
+		return rv.validateConditionParsed(rv.ParsedCond)
+	}
+
+	// 回退到原始逻辑（兼容旧调用方式）
 	// 解析条件表达式
 	if !strings.HasPrefix(condition, "if(") || !strings.HasSuffix(condition, ")") {
 		return false, "条件表达式格式错误"
@@ -529,7 +637,30 @@ func (rv *RuleValidator) ValidateCondition(condition string) (bool, string) {
 	return false, "不支持的比较操作符"
 }
 
+// validateConditionParsed 使用预解析结果进行条件校验（零Split开销）
+func (rv *RuleValidator) validateConditionParsed(pc *parser.ParsedCondition) (bool, string) {
+	// 检查字段索引是否有效
+	if pc.FieldIndex < 0 || pc.FieldIndex >= len(rv.AllFields) {
+		return false, ""
+	}
+
+	actualValue := strings.TrimSpace(rv.AllFields[pc.FieldIndex])
+
+	if pc.IsEqual {
+		// == 条件：值在期望列表中则条件满足
+		_, found := pc.ExpectedExact[actualValue]
+		return found, ""
+	}
+
+	// != 条件：值不在期望列表中则条件满足
+	_, found := pc.ExpectedExact[actualValue]
+	return !found, ""
+}
+
 // validateEqualCondition 验证等于条件
+// 返回值说明：
+//   - true: 条件满足（字段值等于期望值之一），需要继续校验当前字段
+//   - false: 条件不满足（字段值不等于任何期望值），不需要校验当前字段
 func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, string) {
 	parts := strings.Split(condContent, "==")
 	if len(parts) != 2 {
@@ -547,7 +678,7 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 
 	// 检查字段索引是否有效
 	if fieldIndex < 0 || fieldIndex >= len(rv.AllFields) {
-		return true, "" // 字段索引超出范围，条件不满足
+		return false, "" // 字段索引超出范围，条件不满足
 	}
 
 	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex])
@@ -562,22 +693,21 @@ func (rv *RuleValidator) validateEqualCondition(condContent string) (bool, strin
 		}
 
 		if actualValue == expected {
-			// 条件满足，检查当前字段是否为空
-			if rv.FieldValue == "" {
-				// 字段为空，根据业务逻辑决定是否报错
-				// 这里应该由调用方根据字段的"选填/必填"属性来决定
-				// 条件验证只负责验证条件是否满足，不处理字段空值逻辑
-				return true, ""
-			}
+			// 条件满足（字段值等于某个期望值）
+			// 返回true表示"条件满足，需要校验当前字段"
 			return true, ""
 		}
 	}
 
-	// 条件不满足，不需要校验
-	return false, "条件不满足"
+	// 条件不满足（字段值不等于任何期望值）
+	// 返回false表示"条件不满足，不需要校验当前字段"
+	return false, ""
 }
 
 // validateNotEqualCondition 验证不等于条件
+// 返回值说明：
+//   - true: 条件满足（字段值不等于期望值），需要继续校验当前字段
+//   - false: 条件不满足（字段值等于期望值），不需要校验当前字段
 func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, string) {
 	parts := strings.Split(condContent, "!=")
 	if len(parts) != 2 {
@@ -588,14 +718,14 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	expectedValue := strings.TrimSpace(parts[1])
 
 	// 解析字段引用
-	fieldIndex, fieldNumberStr, err := rv.parseFieldReference(fieldRef)
+	fieldIndex, _, err := rv.parseFieldReference(fieldRef)
 	if err != nil {
 		return false, fmt.Sprintf("字段引用错误: %v", err)
 	}
 
 	// 检查字段索引是否有效
 	if fieldIndex < 0 || fieldIndex >= len(rv.AllFields) {
-		return true, "" // 字段索引超出范围，条件不满足
+		return false, "" // 字段索引超出范围，条件不满足
 	}
 
 	actualValue := strings.TrimSpace(rv.AllFields[fieldIndex])
@@ -606,15 +736,14 @@ func (rv *RuleValidator) validateNotEqualCondition(condContent string) (bool, st
 	}
 
 	if actualValue != expectedValue {
-		// 条件满足，当前字段必须有值
-		if rv.FieldValue == "" {
-			return false, fmt.Sprintf("当字段%s不等于%s时，此字段不能为空", fieldNumberStr, expectedValue)
-		}
+		// 条件满足（字段值确实不等于期望值）
+		// 返回true表示"条件满足，需要校验当前字段"
 		return true, ""
 	}
 
-	// 条件不满足，不需要校验
-	return true, ""
+	// 条件不满足（字段值等于期望值）
+	// 返回false表示"条件不满足，不需要校验当前字段"
+	return false, ""
 }
 
 // parseFieldReference 解析字段引用（如 $13）
@@ -642,4 +771,84 @@ func (rv *RuleValidator) parseFieldReference(fieldRef string) (int, string, erro
 	}
 
 	return fieldNumber - 1, fieldNumberStr, nil
+}
+
+// ApplyOffset 应用偏移规则，从字段值中提取子串
+// offsetRule 格式: "offset(6,4)" - 跳过6个字符，从第7个字符开始取4个字符
+// 特殊处理: 去除前导零，如 "0014" → "14"，"1400" → "1400"
+func ApplyOffset(value, offsetRule string) string {
+	// 解析 offset(offset,length)
+	inner := strings.TrimPrefix(offsetRule, "offset(")
+	inner = strings.TrimSuffix(inner, ")")
+	parts := strings.Split(inner, ",")
+	if len(parts) != 2 {
+		return value
+	}
+
+	offset, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	length, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return value
+	}
+
+	if offset >= len(value) {
+		return ""
+	}
+	end := offset + length
+	if end > len(value) {
+		end = len(value)
+	}
+	result := value[offset:end]
+
+	// 去除前导零: "0014" → "14", "1400" → "1400"
+	stripped := strings.TrimLeft(result, "0")
+	if stripped == "" {
+		return "0"
+	}
+	return stripped
+}
+
+// ValidateConditionalType 根据条件映射校验字段类型
+// typeRule: 逗号分隔的类型，如 "ipv4,ipv6"
+// condition: 条件表达式，如 "if($12==1,2)"
+// 条件值与类型按位置映射: 条件值1→类型1, 条件值2→类型2
+// 示例: if($12==1,2);type=ipv4,ipv6 表示 $12==1时校验ipv4, $12==2时校验ipv6
+func (rv *RuleValidator) ValidateConditionalType(typeRule, condition string) (bool, string) {
+	types := strings.Split(typeRule, ",")
+
+	// 尝试根据条件确定具体类型
+	if condition != "" && rv.ParsedCond != nil {
+		// 获取条件引用字段的实际值
+		if rv.ParsedCond.FieldIndex >= 0 && rv.ParsedCond.FieldIndex < len(rv.AllFields) {
+			actualValue := strings.TrimSpace(rv.AllFields[rv.ParsedCond.FieldIndex])
+
+			// 查找匹配的期望值，确定对应的类型
+			for i, expected := range rv.ParsedCond.ExpectedOrder {
+				if actualValue == expected && i < len(types) {
+					targetType := strings.TrimSpace(types[i])
+					return rv.ValidateType(targetType)
+				}
+			}
+		}
+	}
+
+	// 降级: 校验是否符合任意一种类型（OR逻辑）
+	for _, t := range types {
+		t = strings.TrimSpace(t)
+		if valid, _ := rv.ValidateType(t); valid {
+			return true, ""
+		}
+	}
+	return false, fmt.Sprintf("不符合%s格式", typeRule)
+}
+
+// GetConditionMatchedValue 获取条件表达式中引用字段的实际值
+// 用于条件类型映射等场景
+func (rv *RuleValidator) GetConditionMatchedValue(condition string) string {
+	if rv.ParsedCond != nil {
+		if rv.ParsedCond.FieldIndex >= 0 && rv.ParsedCond.FieldIndex < len(rv.AllFields) {
+			return strings.TrimSpace(rv.AllFields[rv.ParsedCond.FieldIndex])
+		}
+	}
+	return ""
 }

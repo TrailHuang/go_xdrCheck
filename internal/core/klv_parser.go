@@ -586,6 +586,11 @@ func (p *KLVParser) convertToInt(data interface{}) int {
 		return int(v)
 	case uint32:
 		return int(v)
+	case string:
+		if val, err := strconv.Atoi(v); err == nil {
+			return val
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -635,6 +640,22 @@ func validateFieldRules(field FieldDef, data string, errors *[]ValidationError) 
 	}
 
 	actualRequired := field.FieldRule.Required
+
+	// 检查必填字段是否为空
+	if actualRequired == "必填" && data == "" {
+		*errors = append(*errors, ValidationError{
+			Filename:   "",
+			LineNum:    1,
+			FieldIndex: 0,
+			FieldName:  field.FieldRule.FieldName,
+			ErrorType:  "required",
+			RuleOrType: "必填",
+			Message:    "必填字段不能为空",
+			FieldValue: data,
+			FullLine:   "",
+		})
+		return fmt.Errorf("必填字段为空")
+	}
 
 	// 然后校验类型
 	if field.FieldRule.Type != "" {
@@ -703,8 +724,8 @@ func validateFieldRules(field FieldDef, data string, errors *[]ValidationError) 
 					FieldValue: ruleValue,
 					FullLine:   "",
 				})
+				return fmt.Errorf("规则校验失败")
 			}
-			return fmt.Errorf("规则校验失败")
 		}
 	}
 

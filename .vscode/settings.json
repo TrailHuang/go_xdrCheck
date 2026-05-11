@@ -1,0 +1,6 @@
+{
+    "svn.delete.ignoredRulesForDeletedFiles": [
+        ".gitignore",
+        "parse_01e0"
+    ]
+}

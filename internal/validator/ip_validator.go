@@ -2,7 +2,6 @@ package validator
 
 import (
 	"net"
-	"strconv"
 	"strings"
 )
 
@@ -12,43 +11,41 @@ var (
 )
 
 func IsIPv4(ip string) bool {
-	// 首先检查是否为有效的IPv4格式
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
-		return false
-	}
-
-	// 检查每个部分是否为有效的数字（0-255）
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-
-		// 检查是否为纯数字
-		for _, char := range part {
-			if char < '0' || char > '9' {
-				return false
-			}
-		}
-
-		// 检查数字范围
-		num, err := strconv.Atoi(part)
-		if err != nil || num < 0 || num > 255 {
-			return false
-		}
-
-		// 检查前导零（除了"0"本身）
-		if len(part) > 1 && part[0] == '0' {
-			return false
-		}
-	}
-
-	// 使用标准库进行最终验证
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return false
 	}
-	return parsedIP.To4() != nil
+
+	// To4 返回 4 字节表示，如果是 IPv4 则非 nil
+	if parsedIP.To4() == nil {
+		return false
+	}
+
+	// 额外检查：确保没有前导零（如 "192.168.001.1"）
+	// 使用字节扫描代替 strings.Split，避免内存分配
+	dotCount := 0
+	partStart := 0
+	for i := 0; i < len(ip); i++ {
+		if ip[i] == '.' {
+			dotCount++
+			// 检查当前段是否有前导零（段长度>1且首字符为'0'）
+			partLen := i - partStart
+			if partLen > 1 && ip[partStart] == '0' {
+				return false
+			}
+			partStart = i + 1
+		}
+	}
+	if dotCount != 3 {
+		return false
+	}
+	// 检查最后一段
+	lastPartLen := len(ip) - partStart
+	if lastPartLen > 1 && ip[partStart] == '0' {
+		return false
+	}
+
+	return true
 }
 
 func IsIPv6(ip string) bool {
@@ -112,6 +109,7 @@ func ValidIPAddress(ipType, ipAddr string) bool {
 func MatchIPv4Pattern(ip string) bool {
 	return IsIPv4(ip)
 }
+
 
 func MatchIPv6Pattern(ip string) bool {
 	return IsIPv6(ip)

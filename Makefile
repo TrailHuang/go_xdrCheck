@@ -37,7 +37,7 @@ build-linux-arm64:
 build:
 	@echo "Building $(PROJECT_NAME) for current platform..."
 	@mkdir -p $(BIN_DIR)
-	$(GO) build -o $(BIN_DIR)/$(PROJECT_NAME) ./cmd/xdrcheck
+	$(GO) build  -buildvcs=false -o $(BIN_DIR)/$(PROJECT_NAME) ./cmd/xdrcheck
 	@echo "Build completed: $(BIN_DIR)/$(PROJECT_NAME)"
 
 # 清理构建文件

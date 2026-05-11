@@ -28,6 +28,7 @@ type CheckerConfig struct {
 	NoSubPath    bool           // 是否检查子路径
 	WorkerNum    int            // 协程数
 	ReportFormat string         // 报告格式
+	ResultDir    string         // 报告输出目录（可选，默认为 /tmp/xdr_check/YYYYMMDD）
 }
 
 // TableReportConfig 表格报告配置
@@ -92,6 +93,7 @@ type XDRChecker struct {
 	mu           sync.Mutex
 	WorkerNum    int    // 协程数，默认4
 	ReportFormat string // 报告格式：txt, table, html
+	ResultDir    string // 报告输出目录
 }
 
 // NewXDRChecker 创建新的XDR检查器（使用结构体参数）
@@ -113,6 +115,7 @@ func NewXDRChecker(config CheckerConfig) *XDRChecker {
 		NoSubPath:    config.NoSubPath,
 		WorkerNum:    config.WorkerNum,
 		ReportFormat: config.ReportFormat,
+		ResultDir:    config.ResultDir,
 	}
 }
 
@@ -157,7 +160,7 @@ func (x *XDRChecker) StartCheck() error {
 	}
 
 	// 解析Excel模板
-	sheetConfigs, err := parser.ParseExcelTemplate(x.Config.TemplateFile)
+	sheetConfigs, err := parser.ParseExcelTemplate(x.Config.TemplateFile, x.Config)
 	if err != nil {
 		return fmt.Errorf("解析模板文件失败: %v", err)
 	}
@@ -185,7 +188,7 @@ func (x *XDRChecker) StartCheck() error {
 		}
 
 		// 扫描该路径下的所有文件
-		filenames, count, err := x.scanFilesForPath(checkPath, pathName, sheetConfig)
+		filenames, _, err := x.scanFilesForPath(checkPath, pathName, sheetConfig)
 		if err != nil {
 			x.writeResult(fmt.Sprintf("扫描路径%s失败: %v", pathName, err))
 			continue
@@ -202,7 +205,8 @@ func (x *XDRChecker) StartCheck() error {
 				IsSpecial:   isSpecial,
 			})
 		}
-		totalFiles += count
+		// 使用实际创建的任务数进行统计，确保与最终处理的任务数一致
+		totalFiles += len(filenames)
 	}
 
 	x.writeResult(fmt.Sprintf("扫描完成，共发现%d个文件，准备使用%d个协程进行处理", totalFiles, x.WorkerNum))
@@ -300,12 +304,12 @@ func (x *XDRChecker) scanFilesForPath(checkPath, pathName string, sheetConfig pa
 	fileTypeFlag[pathName] = config
 
 	// 遍历目录并获取文件列表
-	filenames, count, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
+	filenames, _, err := checker.TraverseDirectory(checkPath, fileTypeFlag, pathName, x.ScanNum)
 	if err != nil {
 		return nil, 0, fmt.Errorf("目录遍历错误: %v", err)
 	}
 
-	return filenames, count, nil
+	return filenames, len(filenames), nil
 }
 
 // processTasksWithWorkerPool 使用协程池处理任务，单协程写入文件
@@ -349,13 +353,34 @@ func (x *XDRChecker) processTasksWithWorkerPool(tasks []CheckTask, workerNum int
 }
 
 // decodeBase64 解码base64编码的字符串
+// 支持逗号分隔的多个base64字符串，每个都会单独解码
+// 返回值：所有解码后的字符串用逗号连接
 func decodeBase64(encoded string) (string, error) {
-	// 导入base64包
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", fmt.Errorf("base64解码失败: %v", err)
+	// 如果是空字符串，直接返回
+	if encoded == "" {
+		return "", nil
 	}
-	return string(decoded), nil
+
+	// 按逗号分割（支持多个base64字符串）
+	encodedParts := strings.Split(encoded, ",")
+	decodedParts := make([]string, 0, len(encodedParts))
+
+	// 逐个解码
+	for i, part := range encodedParts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(part)
+		if err != nil {
+			return "", fmt.Errorf("第%d个base64解码失败: %v", i+1, err)
+		}
+		decodedParts = append(decodedParts, string(decoded))
+	}
+
+	// 将解码后的部分用逗号连接
+	return strings.Join(decodedParts, ","), nil
 }
 
 // worker 协程处理函数
@@ -639,10 +664,18 @@ func (x *XDRChecker) handleLocalToCU(filename string, sheetConfig parser.SheetCo
 }
 
 func (x *XDRChecker) createResultDirectory() string {
-	// 创建结果目录，格式：/tmp/xdr_check/YYYYMMDD
-	now := time.Now()
-	dateStr := now.Format("20060102")
-	resultDir := filepath.Join("/tmp/xdr_check", dateStr)
+	// 创建结果目录
+	var resultDir string
+
+	// 如果指定了自定义目录，使用自定义目录
+	if x.ResultDir != "" {
+		resultDir = x.ResultDir
+	} else {
+		// 否则使用默认目录：/tmp/xdr_check/YYYYMMDD
+		now := time.Now()
+		dateStr := now.Format("20060102")
+		resultDir = filepath.Join("/tmp/xdr_check", dateStr)
+	}
 
 	// 检查目录是否存在
 	if _, err := os.Stat(resultDir); err == nil {
@@ -680,6 +713,48 @@ func (x *XDRChecker) generateResultSummary(pathName, path string, fileCount int,
 	}
 }
 
+// splitLineInto 零分配行分割：将 line 按 delimiter 分割，结果写入预分配的 fields 缓冲区
+// 返回实际分割出的字段数量。maxFields 限制最大分割数（类似 SplitN 的 n 参数）
+func splitLineInto(line, delimiter string, fields []string, maxFields int) int {
+	n := 0
+	start := 0
+	remaining := maxFields - 1 // 剩余可分割次数
+
+	// 单字节分隔符快速路径（最常见场景，如 "|"）
+	if len(delimiter) == 1 {
+		d := delimiter[0]
+		for i := 0; i < len(line) && remaining > 0; i++ {
+			if line[i] == d {
+				if n < len(fields) {
+					fields[n] = line[start:i]
+				}
+				n++
+				start = i + 1
+				remaining--
+			}
+		}
+	} else {
+		dlen := len(delimiter)
+		for i := 0; i <= len(line)-dlen && remaining > 0; i++ {
+			if line[i:i+dlen] == delimiter {
+				if n < len(fields) {
+					fields[n] = line[start:i]
+				}
+				n++
+				start = i + dlen
+				i += dlen - 1
+				remaining--
+			}
+		}
+	}
+	// 最后一段
+	if n < len(fields) {
+		fields[n] = line[start:]
+	}
+	n++
+	return n
+}
+
 func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.SheetConfig) ([]ValidationError, int, time.Duration) {
 	var errors []ValidationError
 	var lineCount int
@@ -708,6 +783,18 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 	// 读取文件内容
 	reader := bufio.NewReader(file)
 	lineNum := 0
+
+	// 预分配字段缓冲区，避免每行重复分配 []string
+	// 注意：实际字段数可能远大于规则数（array/loop 展开后），
+	// 所以缓冲区要足够大，这里用 2*规则数+100 作为安全上限
+	maxFields := len(sheetConfig.FieldRules)*2 + 100
+	fieldBuf := make([]string, maxFields)
+
+	// 预创建验证器对象，在循环中复用
+	fieldValidator := &validator.RuleValidator{
+		AllFields:      nil, // 每行更新
+		FieldNumberMap: sheetConfig.FieldNumberMap,
+	}
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -743,35 +830,89 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 			continue
 		}
 
-		// 解析字段
-		fields := strings.Split(line, x.Config.ColDelimiter)
+		// 解析字段 - 使用零分配分割，复用 fieldBuf 缓冲区
+		nFields := splitLineInto(line, x.Config.ColDelimiter, fieldBuf, maxFields)
+		fields := fieldBuf[:nFields]
 
-		// 校验每个字段
-		for i, fieldRule := range sheetConfig.FieldRules {
-			if i >= len(fields) {
+		// 校验字段数量：只有当Excel模板中配置了FieldCount时才进行检查
+		// 当存在动态规则（jump/array/loop）时，跳过字段数量校验，因为字段数量是动态的
+		fieldCountRule := sheetConfig.FileValidation.FieldCount
+		hasDynamic := HasDynamicRules(sheetConfig.FieldRules)
+		if fieldCountRule != "" && fieldCountRule != "不校验" && !hasDynamic {
+			expectedFieldCount := len(sheetConfig.FieldRules)
+			actualFieldCount := len(fields)
+
+			if expectedFieldCount == 0 {
+				// 配置不完整，静默跳过
+			} else if actualFieldCount != expectedFieldCount {
+				errors = append(errors, ValidationError{
+					Filename:   filename,
+					LineNum:    lineNum,
+					FieldIndex: 0,
+					FieldName:  "字段数量",
+					ErrorType:  "field_count",
+					RuleOrType: "field_count",
+					Message:    fmt.Sprintf("字段数量不匹配: 期望%d个字段，实际%d个字段", expectedFieldCount, actualFieldCount),
+					FieldValue: fmt.Sprintf("%d个字段", actualFieldCount),
+					FullLine:   line,
+				})
 				continue
 			}
+		}
 
-			fieldValue := strings.TrimSpace(fields[i])
+		// 构建字段映射（处理 jump/array/loop 动态规则）
+		// 无动态规则时，映射为简单的 1:1 对应
+		mappings := BuildFieldMapping(fields, sheetConfig.FieldRules, sheetConfig.FieldNumberMap)
+
+		// 为 loop(end=,) 字段构建复合值（如 DataType|DataLevel|DataContent）
+		BuildCompoundValues(mappings, sheetConfig.FieldRules)
+
+		// 校验每个字段
+		// 更新验证器的行字段数据（用原始 fields 数组，用于条件表达式引用）
+		fieldValidator.AllFields = fields
+		for _, mapping := range mappings {
+			fieldRule := sheetConfig.FieldRules[mapping.RuleIndex]
+
+			// 跳过因 jump 规则而不存在的字段
+			if mapping.Skipped {
+				continue
+			}
 
 			// 如果是空字段，跳过检查
 			if fieldRule.Required == "空" {
 				continue
 			}
 
-			// 校验字段
-			fieldValidator := validator.NewRuleValidator(fieldValue, i, fields, sheetConfig.FieldNumberMap)
+			fieldValue := mapping.Value
 
-			// 首先校验条件（如果有）
-			conditionSatisfied := false // 默认条件不满足
+			// 应用 offset 偏移转换（如 offset(6,4)）
+			if fieldRule.Offset != "" {
+				fieldValue = validator.ApplyOffset(fieldValue, fieldRule.Offset)
+			}
+
+			// 构建字段显示名（重复字段附加序号）
+			fieldDisplayName := fieldRule.FieldName
+			if mapping.RepeatNo >= 0 {
+				fieldDisplayName = fmt.Sprintf("%s[%d]", fieldRule.FieldName, mapping.RepeatNo+1)
+			}
+
+			// 字段索引用于错误报告
+			fieldIndexForError := mapping.RuleIndex + 1
+			if mapping.FieldIndex >= 0 {
+				fieldIndexForError = mapping.FieldIndex + 1
+			}
+
+			// 复用验证器对象，避免每字段分配
+			fieldValidator.Reset(fieldValue, mapping.RuleIndex, nil, fieldRule.ParsedCondition)
+
+			// 首先校验条件（如果有），并确定字段的实际必填状态
+			conditionSatisfied := false
+			actualRequired := fieldRule.Required
+
 			if fieldRule.Condition != "" {
 				valid, _ := fieldValidator.ValidateCondition(fieldRule.Condition)
 				conditionSatisfied = valid
-			}
 
-			// 根据条件结果确定字段的实际必填状态
-			actualRequired := fieldRule.Required
-			if fieldRule.Condition != "" {
 				if conditionSatisfied {
 					// 条件满足：选填字段变为必填
 					actualRequired = "必填"
@@ -781,19 +922,43 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 				}
 			}
 
+			// 检查必填字段是否为空
+			if actualRequired == "必填" && fieldValue == "" {
+				errors = append(errors, ValidationError{
+					Filename:   filename,
+					LineNum:    lineNum,
+					FieldIndex: fieldIndexForError,
+					FieldName:  fieldDisplayName,
+					ErrorType:  "required",
+					RuleOrType: "必填",
+					Message:    "必填字段不能为空",
+					FieldValue: fieldValue,
+					FullLine:   line,
+				})
+				continue
+			}
+
 			// 然后校验类型
 			if fieldRule.Type != "" {
 				// 对于选填字段且为空的情况，跳过类型校验
-				if actualRequired == "选填" && fieldValue == "" {
-					// 选填字段为空时，跳过类型校验
-				} else {
-					valid, msg := fieldValidator.ValidateType(fieldRule.Type)
+				if !(actualRequired == "选填" && fieldValue == "") {
+					var valid bool
+					var msg string
+
+					// 条件类型映射: if($12==1,2);type=ipv4,ipv6
+					// 条件值按位置映射到类型
+					if strings.Contains(fieldRule.Type, ",") && fieldRule.Condition != "" {
+						valid, msg = fieldValidator.ValidateConditionalType(fieldRule.Type, fieldRule.Condition)
+					} else {
+						valid, msg = fieldValidator.ValidateType(fieldRule.Type)
+					}
+
 					if !valid {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
 							LineNum:    lineNum,
-							FieldIndex: i + 1,
-							FieldName:  fieldRule.FieldName,
+							FieldIndex: fieldIndexForError,
+							FieldName:  fieldDisplayName,
 							ErrorType:  "type",
 							RuleOrType: fieldRule.Type,
 							Message:    msg,
@@ -806,49 +971,90 @@ func (x *XDRChecker) checkSingleFileContent(filename string, sheetConfig parser.
 
 			// 然后校验其他规则
 			for _, rule := range fieldRule.Rules {
-				// 对于选填字段且为空的情况，跳过规则校验
-				if (actualRequired == "选填" && fieldValue == "") || (fieldRule.Required == "选填" && !conditionSatisfied) {
-					// 选填字段为空时，跳过规则校验
-				} else {
-					// 如果字段类型是base64，先进行base64解码
-					ruleValue := fieldValue
-					if fieldRule.Type == "base64" {
-						decoded, err := decodeBase64(fieldValue)
-						if err != nil {
-							errors = append(errors, ValidationError{
-								Filename:   filename,
-								LineNum:    lineNum,
-								FieldIndex: i + 1,
-								FieldName:  fieldRule.FieldName,
-								ErrorType:  "rule",
-								RuleOrType: rule,
-								Message:    fmt.Sprintf("base64解码失败: %v", err),
-								FieldValue: fieldValue,
-								FullLine:   line,
-							})
-							continue
-						}
-						ruleValue = decoded
-					}
+				// 选填字段为空时，跳过规则校验
+				// 选填字段有值时，无论条件是否满足，都必须校验
+				if actualRequired == "选填" && fieldValue == "" {
+					continue
+				}
 
-					// 使用解码后的值进行规则校验
-					ruleValidator := validator.NewRuleValidator(ruleValue, i, fields, sheetConfig.FieldNumberMap)
-					valid, msg := ruleValidator.ValidateRule(rule)
-					if !valid {
+				ruleValue := fieldValue
+				if fieldRule.Type == "base64" {
+					decoded, err := decodeBase64(fieldValue)
+					if err != nil {
 						errors = append(errors, ValidationError{
 							Filename:   filename,
 							LineNum:    lineNum,
-							FieldIndex: i + 1,
-							FieldName:  fieldRule.FieldName,
+							FieldIndex: fieldIndexForError,
+							FieldName:  fieldDisplayName,
 							ErrorType:  "rule",
 							RuleOrType: rule,
-							Message:    msg,
-							FieldValue: ruleValue,
+							Message:    fmt.Sprintf("base64解码失败: %v", err),
+							FieldValue: fieldValue,
+							FullLine:   line,
+						})
+						continue
+					}
+					ruleValue = decoded
+				}
+
+				var pe *parser.ParsedEnumValue
+				if fieldRule.ParsedEnums != nil {
+					pe = fieldRule.ParsedEnums[rule]
+				}
+
+				// 对于 loop(end=,) 字段的枚举规则，使用复合值匹配
+				// 枚举格式如 [1|1|1001,1|1|1002] 需要 DataType|DataLevel|DataContent 拼接后匹配
+				enumRuleValue := ruleValue
+				if mapping.CompoundValue != "" && strings.HasPrefix(rule, "[") && strings.Contains(rule, "|") {
+					enumRuleValue = mapping.CompoundValue
+				}
+
+				fieldValidator.Reset(enumRuleValue, mapping.RuleIndex, pe, nil)
+				valid, msg := fieldValidator.ValidateRule(rule)
+				if !valid {
+					errors = append(errors, ValidationError{
+						Filename:   filename,
+						LineNum:    lineNum,
+						FieldIndex: fieldIndexForError,
+						FieldName:  fieldDisplayName,
+						ErrorType:  "rule",
+						RuleOrType: rule,
+						Message:    msg,
+						FieldValue: ruleValue,
+						FullLine:   line,
+					})
+				}
+			}
+
+			// 校验属性中的正则规则
+			// 如: if($12==5,8,12,17);reg=[^ ]+
+			// 字段有内容时: 无论条件是否满足，都校验正则
+			// 选填字段为空时: 跳过校验
+			if fieldRule.Regex != "" {
+				if !(actualRequired == "选填" && fieldValue == "") {
+					re, err := validator.GetRegex(fieldRule.Regex)
+					if err == nil && !re.MatchString(fieldValue) {
+						errors = append(errors, ValidationError{
+							Filename:   filename,
+							LineNum:    lineNum,
+							FieldIndex: fieldIndexForError,
+							FieldName:  fieldDisplayName,
+							ErrorType:  "rule",
+							RuleOrType: "reg=" + fieldRule.Regex,
+							Message:    "字段值不符合正则表达式规则",
+							FieldValue: fieldValue,
 							FullLine:   line,
 						})
 					}
 				}
 			}
+		}
+
+		// 特殊校验：针对 0x31+0x06c0 sheet 的 AssetsNum 字段
+		// AssetsNum 应该等于所有 DataContent 字段的次数之和
+		if sheetConfig.SheetName == "0x31+0x06c0" || sheetConfig.SheetName == "0x31 + 0x06c0" {
+			assetsNumErrors := validateAssetsNumConsistency(sheetConfig, line, lineNum, filename, x.Config.ColDelimiter)
+			errors = append(errors, assetsNumErrors...)
 		}
 	}
 
@@ -1020,4 +1226,106 @@ func ClearOldTmpDirs(baseDir string, keepDays int) error {
 	}
 
 	return nil
+}
+
+// validateAssetsNumConsistency 校验 AssetsNum 字段与 DataContent 中包含的数据匹配数量的一致性
+// AssetsNum 应该等于所有 DataContent 字段的次数之和
+// DataContent 格式: "1001,1" 其中逗号后的数字为次数
+func validateAssetsNumConsistency(sheetConfig parser.SheetConfig, line string, lineNum int, filename string, delimiter string) []ValidationError {
+	var errors []ValidationError
+
+	// 解析字段
+	fields := strings.Split(line, delimiter)
+	if len(fields) == 0 {
+		return errors
+	}
+
+	// 查找 AssetsNum 和 DataContent 字段的索引
+	assetsNumIndex := -1
+	dataContentIndices := []int{}
+
+	for i, rule := range sheetConfig.FieldRules {
+		if rule.FieldName == "AssetsNum" {
+			assetsNumIndex = i
+		}
+		if rule.FieldName == "DataContent" {
+			dataContentIndices = append(dataContentIndices, i)
+		}
+	}
+
+	// 如果找不到相关字段，直接返回
+	if assetsNumIndex == -1 || len(dataContentIndices) == 0 {
+		return errors
+	}
+
+	// 获取 AssetsNum 的值
+	if assetsNumIndex >= len(fields) {
+		return errors
+	}
+	assetsNumStr := strings.TrimSpace(fields[assetsNumIndex])
+	if assetsNumStr == "" {
+		return errors // AssetsNum 为空，跳过校验
+	}
+
+	// 解析 AssetsNum
+	var expectedCount int
+	_, err := fmt.Sscanf(assetsNumStr, "%d", &expectedCount)
+	if err != nil {
+		// AssetsNum 不是有效整数，跳过校验
+		return errors
+	}
+
+	// 计算所有 DataContent 字段的次数总和
+	actualCount := 0
+	// 使用 BuildFieldMapping 来处理 loop 展开
+	mappings := BuildFieldMapping(fields, sheetConfig.FieldRules, sheetConfig.FieldNumberMap)
+
+	// 遍历所有映射，找到属于 DataContent 的字段
+	for _, mapping := range mappings {
+		// 检查该映射是否对应 DataContent 规则
+		isDataContent := false
+		for _, dcRuleIndex := range dataContentIndices {
+			if mapping.RuleIndex == dcRuleIndex {
+				isDataContent = true
+				break
+			}
+		}
+
+		if isDataContent && !mapping.Skipped {
+			dataContentValue := mapping.Value
+			if dataContentValue == "" {
+				continue
+			}
+
+			// DataContent 格式: "1001,1" 或 "1045,3"
+			// 提取逗号后的次数
+			parts := strings.Split(dataContentValue, ",")
+			if len(parts) == 2 {
+				countStr := strings.TrimSpace(parts[1])
+				var count int
+				_, err := fmt.Sscanf(countStr, "%d", &count)
+				if err == nil {
+					actualCount += count
+				}
+			}
+		}
+	}
+
+	// 比较期望值和实际值
+	if expectedCount != actualCount {
+		errors = append(errors, ValidationError{
+			Filename:   filename,
+			LineNum:    lineNum,
+			FieldIndex: assetsNumIndex + 1,
+			FieldName:  "AssetsNum",
+			ErrorType:  "rule",
+			RuleOrType: "AssetsNum一致性校验",
+			Message: fmt.Sprintf("数安识别日志数据数量字段与DataContent中包含的数据匹配数量的加总和不一致: AssetsNum=%d, DataContent次数总和=%d",
+				expectedCount, actualCount),
+			FieldValue: assetsNumStr,
+			FullLine:   line,
+		})
+	}
+
+	return errors
 }

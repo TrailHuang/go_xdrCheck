@@ -15,10 +15,12 @@
                 "GOPATH": "${workspaceFolder}"
             },
             "args": [
-                "-n",
-                "2",
+                "-c",
+                "../../conf/xdr_check-IDC.ini",
+                "-m",
+                "../../conf/xdr_check_template-ctcc.xlsx",
                 "-t",
-                "20260326"
+                "20260424"
             ]
         }
 

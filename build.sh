@@ -3,7 +3,7 @@
 # XDR检查工具构建脚本
 # 同时编译Linux x86_64和ARM64版本并打包
 
-PKT_VER="go_xdr_check"
+PKT_VER="xdr_check"
 PLATFORM="linux"
 ARCH="x86_64"
 release_dir="xdr_check_tools"
@@ -114,8 +114,8 @@ build_project() {
 create_release_package() {
     log_info "创建发布包..."
 
-    # 获取版本信息
-    VERSION="v1.1.18"
+    # 从版本文件读取版本信息
+    VERSION=$(cat GO_XDRCHECK_VERSION.txt 2>/dev/null || echo "v0.0.0-dev")
 
     # 创建发布目录
     rm -rf "$release_dir"
@@ -132,9 +132,7 @@ create_release_package() {
     cp -f "build/bin/linux/arm64/xdr_check_optimized" "$release_dir/linux/arm64/"
 
     # 复制配置文件
-    cp -f *.ini "$release_dir/" 2>/dev/null || true
-    cp -f *.txt "$release_dir/" 2>/dev/null || true
-    cp -f conf "$release_dir/" 2>/dev/null || true
+    cp -rf conf "$release_dir/" 2>/dev/null || true
     cp -f xdr_check_template-*.xlsx "$release_dir/" 2>/dev/null || true
 
     # 设置默认配置文件
@@ -191,7 +189,7 @@ EOF
     chmod +x "$release_dir/run_xdr_check.sh"
 
     # 打包
-    PACKAGE_NAME="${PKT_VER}_linux_multiarch_${VERSION}"
+    PACKAGE_NAME="${PKT_VER}_linux_${VERSION}"
 
     # 确保包名中没有特殊字符
     PACKAGE_NAME=$(echo "$PACKAGE_NAME" | tr -d '[:space:]')

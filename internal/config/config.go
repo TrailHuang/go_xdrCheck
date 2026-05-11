@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/go-ini/ini"
 )
@@ -11,6 +12,7 @@ type Config struct {
 	ColDelimiter string
 	XDRPaths     map[string]string
 	TemplateFile string
+	IniConfig    *ini.File // 保存INI配置引用
 }
 
 func LoadConfig(file string) (*Config, error) {
@@ -28,6 +30,9 @@ func LoadConfig(file string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("加载配置文件失败: %v", err)
 	}
+
+	// 保存INI配置引用
+	cfg.IniConfig = iniCfg
 
 	// 读取默认分隔符
 	if iniCfg.HasSection("DEFAULT") {
@@ -76,4 +81,32 @@ func GetConfigFile() string {
 
 	// 默认返回第一个配置文件
 	return configFiles[0]
+}
+
+func GetConfigValue(cfg *Config, configItem string) string {
+	if cfg == nil || cfg.IniConfig == nil || configItem == "" {
+		return ""
+	}
+
+	// 解析配置项路径，格式为 "section.key"
+	parts := strings.SplitN(configItem, ".", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+
+	sectionName := strings.TrimSpace(parts[0])
+	keyName := strings.TrimSpace(parts[1])
+
+	// 检查section是否存在
+	if !cfg.IniConfig.HasSection(sectionName) {
+		return ""
+	}
+
+	section := cfg.IniConfig.Section(sectionName)
+	if !section.HasKey(keyName) {
+		return ""
+	}
+
+	value := section.Key(keyName).String()
+	return strings.TrimSpace(value)
 }
