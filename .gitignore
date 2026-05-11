@@ -10,4 +10,3 @@ xdr_check_tools/xdr_check.ini
 AGENTS.md
 .gitignore
 xdr_check_linux_multiarch_v1.1.18.tar.gz
-.vscode/launch.json
