@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"runtime/pprof"
 	"xdrCheck/internal/config"
 	"xdrCheck/internal/core"
 
@@ -13,16 +14,19 @@ import (
 )
 
 var (
-	version    = "2025_v1.1.18"
-	buildTime  = "unknown"
-	svnNo      = "unknown"
-	timeParam  string
-	scanNum    int
-	checkNow   bool
-	noSubPath  bool
-	workerNum  int
-	format     string
-	configFile string
+	version      = "go_dev"
+	buildTime    = "unknown"
+	svnNo        = "unknown"
+	timeParam    string
+	scanNum      int
+	checkNow     bool
+	noSubPath    bool
+	workerNum    int
+	format       string
+	configFile   string
+	templateFile string // 指定xlsx模板文件
+	resultDir    string // 指定报告输出目录
+	pprofSwitch  bool
 )
 
 func main() {
@@ -36,6 +40,9 @@ func main() {
 	pflag.BoolP("help", "h", false, "help info")
 	pflag.BoolP("version", "v", false, "version info")
 	pflag.StringVarP(&configFile, "config", "c", "", "config file path")
+	pflag.StringVarP(&templateFile, "template", "m", "", "xlsx template file path (override xdr_template_file in config)")
+	pflag.StringVarP(&resultDir, "output", "d", "", "result output directory (default: /tmp/xdr_check/YYYYMMDD)")
+	pflag.BoolVarP(&pprofSwitch, "pprof", "x", false, "enable pprof for performance analysis")
 
 	pflag.Parse()
 
@@ -48,6 +55,28 @@ func main() {
 	if pflag.Lookup("version").Value.String() == "true" {
 		printVersion()
 		return
+	}
+	if pprofSwitch {
+		// 性能分析: CPU profile (根据配置开关控制)
+		cpuProfile, err := os.Create("cpu_profile.prof")
+		if err != nil {
+			fmt.Printf("创建CPU profile文件失败: %v\n", err)
+			return
+		}
+		pprof.StartCPUProfile(cpuProfile)
+		defer pprof.StopCPUProfile()
+		fmt.Println("性能分析已开启")
+		// 性能分析: 内存 profile (根据配置开关控制)
+		defer func() {
+			memProfile, err := os.Create("mem_profile.prof")
+			if err != nil {
+				fmt.Printf("创建内存profile文件失败: %v\n", err)
+				return
+			}
+			pprof.WriteHeapProfile(memProfile)
+			memProfile.Close()
+			fmt.Println("内存profile已保存: mem_profile.prof")
+		}()
 	}
 
 	// 处理时间参数
@@ -92,6 +121,8 @@ func printHelp() {
 	fmt.Println("-r,\t--routines\t\tnumber of worker routines (default: 4)")
 	fmt.Println("-f,\t--format\t\treport format: txt, table, html (default: txt)")
 	fmt.Println("-c,\t--config\t\tconfig file path")
+	fmt.Println("-m,\t--template\t\txlsx template file path (override xdr_template_file in config)")
+	fmt.Println("-d,\t--output\t\tresult output directory (default: /tmp/xdr_check/YYYYMMDD)")
 	fmt.Println("========================================================")
 }
 
@@ -111,6 +142,11 @@ func startCheck(configFile string) error {
 		return fmt.Errorf("加载配置文件%s 失败: %v", configFile, err)
 	}
 
+	// 如果命令行指定了模板文件，则覆盖配置文件中的设置
+	if templateFile != "" {
+		cfg.TemplateFile = templateFile
+	}
+
 	// 创建检查器配置
 	checkerConfig := core.CheckerConfig{
 		Config:       cfg,
@@ -119,6 +155,7 @@ func startCheck(configFile string) error {
 		NoSubPath:    noSubPath,
 		WorkerNum:    workerNum,
 		ReportFormat: format,
+		ResultDir:    resultDir,
 	}
 
 	// 创建检查器
