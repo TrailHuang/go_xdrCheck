@@ -3,7 +3,7 @@
 # 项目配置
 PROJECT_NAME := xdr_check_optimized
 MODULE_NAME := github.com/user/go_xdrCheck
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+VERSION := $(shell cat GO_XDRCHECK_VERSION.txt 2>/dev/null || echo "v0.0.0-dev")
 BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 
